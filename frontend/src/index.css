@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #1b2336 0%, #0b0d12 60%);
+}
+
+.page-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+.panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(14, 17, 25, 0.85);
+  backdrop-filter: blur(12px);
+}
+
+.stagger > * {
+  animation: fadeUp 0.6s ease forwards;
+  opacity: 0;
+}
+
+.stagger > *:nth-child(1) {
+  animation-delay: 0.05s;
+}
+
+.stagger > *:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.stagger > *:nth-child(3) {
+  animation-delay: 0.25s;
+}
+
+@keyframes fadeUp {
+  from {
+    transform: translateY(16px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
