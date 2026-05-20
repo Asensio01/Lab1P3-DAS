@@ -1,4 +1,4 @@
-from simulator.main import main
+from simulator.app.main import main
 
 
 if __name__ == "__main__":
