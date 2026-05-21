@@ -3,6 +3,7 @@ import logging
 import httpx
 import asyncio
 import random
+from decimal import Decimal
 from app.config import settings
 from app.types import TransactionCreate
 
@@ -112,7 +113,7 @@ async def obtener_cuentas_candidatas_fraude() -> list[dict]:
 async def obtener_cuentas_candidatas_stres() -> list[dict]:
     """
     Consulta al backend los detalles de las cuentas para verificar 
-    cuáles están Activas y tienen saldo suficiente (>= 27000).
+    cuáles están Activas y tienen saldo suficiente (>= 1000).
     """
     cuentas_ids = []
     
@@ -122,8 +123,47 @@ async def obtener_cuentas_candidatas_stres() -> list[dict]:
             try:
                 res = await client.get(f"/accounts/{account_id}")
                 if res.status_code == 200:
-                    cuentas_ids.append(account_id)
+                    acc = res.json()
+                    # Validamos requisitos estructurales de la DB
+                    balance = float(acc.get("balance", 0) or 0)
+                    if acc.get("state") == "Activo" and balance >= 1000.00:
+                        cuentas_ids.append(account_id)
             except Exception:
                 continue
                 
     return cuentas_ids
+
+async def obtener_cuentas_candidatas_doble_pago() -> list[dict]:
+    """
+    Consulta al backend los detalles de las cuentas para verificar 
+    cuáles están Activas y tienen saldo suficiente (> 0.01).
+    """
+    cuentas_aptas = []
+    
+    async with httpx.AsyncClient(base_url=base_api_url, timeout=5.0) as client:
+        # Consultamos las primeras cuentas del sistema (ej: IDs del 1 al 15)
+        for account_id in range(1, 15):
+            try:
+                res = await client.get(f"/accounts/{account_id}")
+                if res.status_code == 200:
+                    acc = res.json()
+                    balance = Decimal(str(acc.get("balance", "0") or "0"))
+                    if acc.get("state") == "Activo" and balance > Decimal("0.01"):
+                        cuentas_aptas.append({"id": account_id, "balance": balance})
+            except Exception:
+                continue
+                
+    return cuentas_aptas
+
+async def enviar_transaccion_con_feedback(tx: TransactionCreate) -> dict:
+    """Envía una transacción sin reintentos automáticos para evaluar si el backend frena el choque."""
+    
+    async with httpx.AsyncClient(base_url=base_api_url) as client:
+        try:
+            response = await client.post("/transactions", json=tx.model_dump(mode="json"))
+            return {
+                "status": response.status_code,
+                "detail": response.json() if response.status_code in (200, 201, 409, 403, 400) else response.text
+            }
+        except Exception as e:
+            return {"status": 500, "detail": f"Error de conexión: {str(e)}"}

@@ -4,7 +4,7 @@ import asyncio
 import logging
 from decimal import Decimal
 from app.types import TransactionCreate
-from app.client import enviar_transaccion
+from app.client import enviar_transaccion, enviar_transaccion_con_feedback
 
 logger = logging.getLogger("simulator")
 
@@ -78,3 +78,48 @@ async def ejecutar_rafaga_estres(cantidad_tx: int, cuentas_disponibles: list[int
     # Dispara todas las solicitudes en paralelo hacia el Backend de FastAPI
     await asyncio.gather(*tareas)
     logger.warning(f"🛑 Fin de la ráfaga de estrés. Se enviaron {cantidad_tx} peticiones.")
+
+async def ejecutar_ataque_race_condition(account_id: int, balance_actual: Decimal) -> dict:
+    """
+    Dispara dos transacciones idénticas al mismo milisegundo por el monto TOTAL del saldo.
+    Retorna el resultado detallado de ambas peticiones para dar feedback al Frontend.
+    """
+    logger.warning(f"⚔️ DETONANDO RACE CONDITION EN CUENTA ID: {account_id} (Saldo: ${balance_actual}) ⚔️")
+    
+    # Creamos dos payloads idénticos que intentan retirar el total del dinero al mismo tiempo
+    tx1 = TransactionCreate(
+        account_id=account_id,
+        ip="192.168.50.99",
+        amount=balance_actual,
+        country="SV"
+    )
+    tx2 = tx1.model_copy() # Duplicado exacto del ataque
+    
+    # Modificaremos ligeramente el envío para capturar las respuestas HTTP del backend
+    # Ejecutamos ambas tareas estrictamente en paralelo (mismo instante de tiempo)
+    resultados = await asyncio.gather(
+        enviar_transaccion_con_feedback(tx1),
+        enviar_transaccion_con_feedback(tx2)
+    )
+    
+    res_tx1, res_tx2 = resultados[0], resultados[1]
+    
+    # Analizamos qué ocurrió
+    exito_tx1 = res_tx1["status"] in (200, 201)
+    exito_tx2 = res_tx2["status"] in (200, 201)
+    
+    status_final = "PROTEGIDO"
+    if exito_tx1 and exito_tx2:
+        status_final = "VULNERABLE (¡Peligro! Ambas transacciones pasaron)"
+    elif not exito_tx1 and not exito_tx2:
+        status_final = "RECHAZADO_TOTAL (Ambas fallaron)"
+        
+    logger.info(f"📊 Resultado Race Condition Cuenta {account_id}: Tx1={res_tx1['status']}, Tx2={res_tx2['status']} -> {status_final}")
+    
+    return {
+        "account_id": account_id,
+        "saldo_inicial": str(balance_actual),
+        "transaccion_1": res_tx1,
+        "transaccion_2": res_tx2,
+        "resultado_sistema": status_final
+    }
