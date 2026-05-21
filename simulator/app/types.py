@@ -13,3 +13,6 @@ class FraudSimulationRequest(BaseModel):
 
 class StressSimulationRequest(BaseModel):
     cantidad_transacciones: int = Field(..., ge=1, le=500, description="Número de transacciones a disparar en la ráfaga")
+
+class RaceConditionRequest(BaseModel):
+    cantidad_cuentas: int = Field(..., ge=1, description="Número de cuentas en las que se probará la Race Condition")

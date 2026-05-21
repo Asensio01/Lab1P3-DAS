@@ -5,9 +5,9 @@ import logging
 import random
 from app.config import settings
 from fastapi import FastAPI, APIRouter, HTTPException, status
-from app.types import FraudSimulationRequest
-from app.client import obtener_cuentas_candidatas_fraude, garantizar_cuentas_iniciales, enviar_transaccion, obtener_cuentas_candidatas_stres
-from app.scenarios import ejecutar_rafaga_fraude, generar_transaccion_normal
+from app.types import FraudSimulationRequest, RaceConditionRequest
+from app.client import obtener_cuentas_candidatas_doble_pago, obtener_cuentas_candidatas_fraude, garantizar_cuentas_iniciales, enviar_transaccion, obtener_cuentas_candidatas_stres
+from app.scenarios import ejecutar_ataque_race_condition, ejecutar_rafaga_fraude, generar_transaccion_normal
 from app.types import StressSimulationRequest
 from app.scenarios import ejecutar_rafaga_estres
 
@@ -21,7 +21,7 @@ logger = logging.getLogger("simulator")
 # Variable global para controlar la ejecución del bucle
 simulador_activo = True
 
-async def bucle_simulacion_normal():
+"""async def bucle_simulacion_normal():
     logger.info("Esperando estabilización del Backend e iniciando siembra...")
     await asyncio.sleep(5) # Margen de espera para asegurar que Postgres/FastAPI estén listos
     
@@ -39,17 +39,17 @@ async def bucle_simulacion_normal():
         await enviar_transaccion(tx)
         
         # Esperar intervalo fijado en las configuraciones
-        await asyncio.sleep(settings.INTERVALO_SEGUNDOS)
+        await asyncio.sleep(settings.INTERVALO_SEGUNDOS)"""
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Código que se ejecuta al arrancar el contenedor
-    task = asyncio.create_task(bucle_simulacion_normal())
+    #task = asyncio.create_task(bucle_simulacion_normal())
     yield
     # Código que se ejecuta al apagar el contenedor
     global simulador_activo
     simulador_activo = False
-    task.cancel()
+    #task.cancel()
     logger.info("Simulador apagado correctamente.")
 
 app = FastAPI(title="FinTech Guard - Simulator API", lifespan=lifespan)
@@ -109,7 +109,6 @@ async def activar_simulacion_estres(payload: StressSimulationRequest):
     Endpoint dinámico para pruebas de estrés. 
     Envía 'N' transacciones desde diferentes cuentas usando la misma IP.
     """
-    base_api_url = f"{settings.BACKEND_URL.rstrip('/')}/api/v1"
     
     # 1. Obtener los IDs de cuentas disponibles en el sistema para poder variar
     cuentas_ids = await obtener_cuentas_candidatas_stres()
@@ -127,4 +126,48 @@ async def activar_simulacion_estres(payload: StressSimulationRequest):
         "message": f"Prueba de estrés iniciada en segundo plano con {payload.cantidad_transacciones} peticiones.",
         "ip_atacante": "192.168.100.50",
         "cuentas_involucradas": cuentas_ids
+    }
+
+@app.post(
+    "/api/v1/simulations/race-condition",
+    status_code=status.HTTP_200_OK,
+    tags=["Simulación"]
+)
+async def activar_simulacion_race_condition(payload: RaceConditionRequest):
+    """
+    Endpoint síncrono para pruebas de Race Condition. 
+    Busca cuentas con saldo > 0.01 y ejecuta ataques de doble gasto simultáneo.
+    Devuelve el reporte de colisión directamente al Frontend.
+    """
+    
+    # 1. Buscar cuentas activas que tengan saldo disponible para vaciar (> 0.01)
+    cuentas_aptas = await obtener_cuentas_candidatas_doble_pago()
+
+    if not cuentas_aptas:
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail="No hay cuentas activas con saldo positivo en el sistema para realizar esta prueba."
+        )
+        
+    if len(cuentas_aptas) < payload.cantidad_cuentas:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Solicitaste {payload.cantidad_cuentas} cuentas, pero solo hay {len(cuentas_aptas)} disponibles con saldo."
+        )
+
+    # 2. Seleccionar las cuentas solicitadas de forma aleatoria
+    import random
+    cuentas_seleccionadas = random.sample(cuentas_aptas, payload.cantidad_cuentas)
+    
+    reporte_final = []
+    
+    # 3. Ejecutar los ataques secuencialmente por cuenta, pero internamente síncronos en paralelo
+    for cuenta in cuentas_seleccionadas:
+        resultado_ataque = await ejecutar_ataque_race_condition(cuenta["id"], cuenta["balance"])
+        reporte_final.append(resultado_ataque)
+        
+    return {
+        "status": "completed",
+        "resumen": f"Prueba realizada con éxito en {payload.cantidad_cuentas} cuentas.",
+        "reporte": reporte_final
     }
