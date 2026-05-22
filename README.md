@@ -36,6 +36,20 @@ Desde frontend/:
 - pnpm install
 - pnpm dev
 
+## Rutas
+Frontend en:
+- http://localhost:5173
+Backend disponible en:
+- http://localhost:8000
+- Swagger: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+Simulador disponible en:
+- http://localhost:8001
+- Swagger: http://localhost:8001/docs
+- ReDoc: http://localhost:8001/redoc
+Netdata disponible en:
+- http://localhost:19999
+
 ## Probar el backend
 1) Crear una cuenta (temporal, via SQL):
 - docker exec -it fintech_postgres psql -U postgres -d fintech_db -c "INSERT INTO account (user_name, user_info, balance) VALUES ('juan', '{\"name\":\"Juan\"}', 10000.00) RETURNING id;"
