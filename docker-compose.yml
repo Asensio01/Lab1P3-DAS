@@ -52,7 +52,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: fintech_db
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -100,10 +100,36 @@ services:
         condition: service_healthy
     networks:
       - fintech_net
+  netdata:
+    image: netdata/netdata:stable
+    container_name: fintech_netdata
+    pid: host
+    #network_mode: host # Opción alternativa muy recomendada para Netdata, o usar red:
+    # Mapear el puerto de forma tradicional de la red, usa lo siguiente:
+    networks:
+      - fintech_net
+    ports:
+      - "19999:19999"
+    volumes:
+      - netdataconfig:/etc/netdata
+      - netdatalib:/var/lib/netdata
+      - netdatacache:/var/cache/netdata
+      # Estos volúmenes le permiten a Netdata leer el estado del hardware real y Docker
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor=unconfined
+    restart: unless-stopped
 
 volumes:
   postgres_data:
   frontend_node_modules:
+  netdataconfig:
+  netdatalib:
+  netdatacache:
 
 networks:
   fintech_net:
