@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from decimal import Decimal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from api.dependencies import (
     AuditServiceContext,
@@ -102,6 +104,24 @@ async def create_account(
             state=payload.state,
         )
     return AccountResponse.model_validate(account)
+
+
+@router.get(
+    "/accounts/active",
+    response_model=list[AccountResponse],
+    tags=["accounts"],
+    summary="List active accounts",
+    description="Returns active accounts with balance >= min_balance.",
+    responses={
+        200: {"description": "Active accounts returned"},
+    },
+)
+async def list_active_accounts(
+    min_balance: Decimal = Query(..., ge=0),
+    context: AccountServiceContext = Depends(get_account_service),
+) -> list[AccountResponse]:
+    accounts = await context.service.get_all_active_accounts(min_balance)
+    return [AccountResponse.model_validate(account) for account in accounts]
 
 
 @router.get(

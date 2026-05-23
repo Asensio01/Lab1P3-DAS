@@ -8,7 +8,13 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from infrastructure.models import Account, FlaggedTransaction, SecurityLog, Transaction
+from infrastructure.models import (
+    Account,
+    AccountState,
+    FlaggedTransaction,
+    SecurityLog,
+    Transaction,
+)
 
 
 class SqlAlchemyAccountRepository:
@@ -55,6 +61,15 @@ class SqlAlchemyAccountRepository:
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def list_active(self, min_balance: Decimal) -> list[Account]:
+        result = await self._session.execute(
+            select(Account).where(
+                Account.state == AccountState.ACTIVO,
+                Account.balance >= min_balance,
+            )
+        )
+        return list(result.scalars().all())
 
 
 class SqlAlchemyTransactionRepository:
