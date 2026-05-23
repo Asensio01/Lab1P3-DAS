@@ -32,7 +32,7 @@ def generar_transaccion_normal(account_id: int) -> TransactionCreate:
 
 # Escenario de fraude: Ráfaga de transacciones sospechosas
 async def ejecutar_rafaga_fraude(account_id: int):
-    """Dispara 3 transacciones de $9,000 en ráfaga para una cuenta."""
+    """Dispara 4 transacciones de $9,000 en ráfaga para una cuenta."""
     logger.warning(f"🚨 INICIANDO PATRÓN DE FRAUDE EN CUENTA ID: {account_id} 🚨")
     
     for i in range(1, 5): # Enviaremos 4 transacciones de $9,000

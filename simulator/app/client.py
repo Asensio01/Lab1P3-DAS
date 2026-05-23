@@ -50,8 +50,9 @@ async def enviar_transaccion(tx: TransactionCreate, max_retries: int = 5):
     Envía la transacción al backend. 
     Si hay un conflicto de concurrencia (409), reintenta automáticamente con backoff exponencial.
     """
-    
-    async with httpx.AsyncClient(base_url=base_api_url) as client:
+    # Configuramos un timeout explícito y más holgado de 30 segundos para soportar el estrés
+    limits = httpx.Limits(max_keepalive_connections=100, max_connections=200)
+    async with httpx.AsyncClient(base_url=base_api_url, timeout=30.0, limits=limits) as client:
         for intento in range(1, max_retries + 1):
             try:
                 response = await client.post("/transactions", json=tx.model_dump(mode="json"))
@@ -80,6 +81,11 @@ async def enviar_transaccion(tx: TransactionCreate, max_retries: int = 5):
                 else:
                     logger.error(f"❌ Backend rechazó transacción: {response.status_code} - {response.text}")
                     return
+            
+            except httpx.TimeoutException:
+                logger.error(f"⏳ [Intento {intento}] ¡Timeout de red esperando al backend para la cuenta {tx.account_id}!")
+                await asyncio.sleep(1.0)
+                continue
 
             except Exception as e:
                 logger.error(f"💥 Error de conexión con el Backend (Intento {intento}): {e}")
@@ -96,7 +102,7 @@ async def obtener_cuentas_candidatas_fraude() -> list[dict]:
     
     async with httpx.AsyncClient(base_url=base_api_url, timeout=5.0) as client:
         # Consultamos las primeras cuentas del sistema (ej: IDs del 1 al 10)
-        for account_id in range(1, 11):
+        for account_id in range(1, 50):
             try:
                 res = await client.get(f"/accounts/{account_id}")
                 if res.status_code == 200:
@@ -110,7 +116,7 @@ async def obtener_cuentas_candidatas_fraude() -> list[dict]:
                 
     return cuentas_aptas
 
-async def obtener_cuentas_candidatas_stres() -> list[dict]:
+async def obtener_cuentas_candidatas_estres() -> list[dict]:
     """
     Consulta al backend los detalles de las cuentas para verificar 
     cuáles están Activas y tienen saldo suficiente (>= 1000).
@@ -119,7 +125,7 @@ async def obtener_cuentas_candidatas_stres() -> list[dict]:
     
     async with httpx.AsyncClient(base_url=base_api_url, timeout=5.0) as client:
         # Consultamos las primeras cuentas del sistema (ej: IDs del 1 al 10)
-        for account_id in range(1, 11):
+        for account_id in range(1, 50):
             try:
                 res = await client.get(f"/accounts/{account_id}")
                 if res.status_code == 200:

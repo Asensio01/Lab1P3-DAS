@@ -6,7 +6,7 @@ import random
 from app.config import settings
 from fastapi import FastAPI, APIRouter, HTTPException, status
 from app.types import FraudSimulationRequest, RaceConditionRequest
-from app.client import obtener_cuentas_candidatas_doble_pago, obtener_cuentas_candidatas_fraude, garantizar_cuentas_iniciales, enviar_transaccion, obtener_cuentas_candidatas_stres
+from app.client import obtener_cuentas_candidatas_doble_pago, obtener_cuentas_candidatas_fraude, garantizar_cuentas_iniciales, enviar_transaccion, obtener_cuentas_candidatas_estres
 from app.scenarios import ejecutar_ataque_race_condition, ejecutar_rafaga_fraude, generar_transaccion_normal
 from app.types import StressSimulationRequest
 from app.scenarios import ejecutar_rafaga_estres
@@ -111,7 +111,7 @@ async def activar_simulacion_estres(payload: StressSimulationRequest):
     """
     
     # 1. Obtener los IDs de cuentas disponibles en el sistema para poder variar
-    cuentas_ids = await obtener_cuentas_candidatas_stres()
+    cuentas_ids = await obtener_cuentas_candidatas_estres()
 
     if not cuentas_ids:
         raise HTTPException(
