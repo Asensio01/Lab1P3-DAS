@@ -27,7 +27,22 @@ services:
       retries: 5
     networks:
       - fintech_net
-
+  simulator:
+    build:
+      context: ./simulator
+      dockerfile: Dockerfile
+    container_name: fintech_simulator
+    restart: always
+    environment:
+      - BACKEND_URL=http://fintech_backend:8000 
+      - PORT=8001
+    ports:
+      - "8001:8001"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - fintech_net
   db_postgres:
     image: postgres:18-alpine
     container_name: fintech_postgres
@@ -37,9 +52,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: fintech_db
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d fintech_db"]
       interval: 10s
@@ -73,6 +89,7 @@ services:
     environment:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
       VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8000/ws}
+      VITE_SIMULATOR_URL: ${VITE_SIMULATOR_URL:-http://localhost:8001}
     ports:
       - "5173:5173"
     volumes:
@@ -83,10 +100,36 @@ services:
         condition: service_healthy
     networks:
       - fintech_net
+  netdata:
+    image: netdata/netdata:stable
+    container_name: fintech_netdata
+    pid: host
+    #network_mode: host # Opción alternativa muy recomendada para Netdata, o usar red:
+    # Mapear el puerto de forma tradicional de la red, usa lo siguiente:
+    networks:
+      - fintech_net
+    ports:
+      - "19999:19999"
+    volumes:
+      - netdataconfig:/etc/netdata
+      - netdatalib:/var/lib/netdata
+      - netdatacache:/var/cache/netdata
+      # Estos volúmenes le permiten a Netdata leer el estado del hardware real y Docker
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor=unconfined
+    restart: unless-stopped
 
 volumes:
   postgres_data:
   frontend_node_modules:
+  netdataconfig:
+  netdatalib:
+  netdatacache:
 
 networks:
   fintech_net:

@@ -30,6 +30,7 @@ class Settings(BaseSettings):
 
     vite_api_base_url: str | None = Field(None, alias="VITE_API_BASE_URL")
     vite_ws_url: str | None = Field(None, alias="VITE_WS_URL")
+    vite_simulator_url: str | None = Field(None, alias="VITE_SIMULATOR_URL")
 
 
 settings = Settings()
