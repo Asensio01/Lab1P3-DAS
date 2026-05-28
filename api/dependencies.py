@@ -7,6 +7,7 @@ from infrastructure.database import get_async_session, redis_client
 from repositories.postgres import (
     SqlAlchemyAccountRepository,
     SqlAlchemyFlaggedTransactionRepository,
+    SqlAlchemySecurityLogRepository,
     SqlAlchemyTransactionRepository,
 )
 from repositories.redis import RedisFraudStore
@@ -14,6 +15,7 @@ from services.antifraud import AntifraudService
 from services.accounts import AccountService
 from services.audit import AuditService
 from services.transactions import TransactionService
+from services.security import SecurityLogService
 
 
 @dataclass
@@ -31,6 +33,12 @@ class AuditServiceContext:
 @dataclass
 class AccountServiceContext:
     service: AccountService
+    session: AsyncSession
+
+
+@dataclass
+class SecurityLogContext:
+    service: SecurityLogService
     session: AsyncSession
 
 
@@ -70,3 +78,11 @@ async def get_account_service(
     account_repo = SqlAlchemyAccountRepository(session)
     service = AccountService(account_repo)
     return AccountServiceContext(service=service, session=session)
+
+
+async def get_security_log_service(
+    session: AsyncSession = Depends(get_async_session),
+) -> SecurityLogContext:
+    repo = SqlAlchemySecurityLogRepository(session)
+    service = SecurityLogService(repo)
+    return SecurityLogContext(service=service, session=session)

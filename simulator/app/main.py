@@ -5,8 +5,15 @@ import logging
 import random
 from app.config import settings
 from fastapi import FastAPI, APIRouter, HTTPException, status
-from app.types import FraudSimulationRequest, RaceConditionRequest
-from app.client import obtener_cuentas_candidatas_doble_pago, obtener_cuentas_candidatas_fraude, garantizar_cuentas_iniciales, enviar_transaccion, obtener_cuentas_candidatas_estres
+from app.types import ExpiredTokenRequest, FraudSimulationRequest, RaceConditionRequest
+from app.client import (
+    obtener_cuentas_candidatas_doble_pago,
+    obtener_cuentas_candidatas_fraude,
+    garantizar_cuentas_iniciales,
+    enviar_transaccion,
+    obtener_cuentas_candidatas_estres,
+    verificar_token_expirado,
+)
 from app.scenarios import ejecutar_ataque_race_condition, ejecutar_rafaga_fraude, generar_transaccion_normal
 from app.types import StressSimulationRequest
 from app.scenarios import ejecutar_rafaga_estres
@@ -170,4 +177,20 @@ async def activar_simulacion_race_condition(payload: RaceConditionRequest):
         "status": "completed",
         "resumen": f"Prueba realizada con éxito en {payload.cantidad_cuentas} cuentas.",
         "reporte": reporte_final
+    }
+
+
+@app.post(
+    "/api/v1/simulations/expired-token",
+    status_code=status.HTTP_200_OK,
+    tags=["Simulación"],
+)
+async def activar_simulacion_token_expirado(payload: ExpiredTokenRequest):
+    """
+    Solicita un token de login, espera a que expire y prueba acceso al backend.
+    """
+    resultado = await verificar_token_expirado(payload.account_id)
+    return {
+        "status": "completed",
+        "resultado": resultado,
     }

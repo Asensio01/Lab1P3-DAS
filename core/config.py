@@ -25,6 +25,14 @@ class Settings(BaseSettings):
 
     postgres_password: str | None = Field(None, alias="POSTGRES_PASSWORD")
 
+    jwt_secret: str = Field(..., alias="JWT_SECRET")
+    jwt_issuer: str = Field("fintech-guard", alias="JWT_ISSUER")
+    jwt_audience: str = Field("fintech-guard-api", alias="JWT_AUDIENCE")
+    jwt_exp_seconds: int = Field(900, alias="JWT_EXP_SECONDS", ge=30)
+
+    admin_username: str = Field("admin", alias="ADMIN_USERNAME")
+    admin_password: str = Field(..., alias="ADMIN_PASSWORD")
+
     environment: str = Field("production", alias="APP_ENV")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
 

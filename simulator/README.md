@@ -7,3 +7,4 @@ Suggested next steps:
 - Add IP burst scenario and concurrent balance-drain scenario.
 - Add latency metrics and correlation IDs per request.
 - Support CLI flags for rate, duration, and base URL.
+- Add auth env vars (AUTH_USERNAME, AUTH_PASSWORD) to reuse backend login.
