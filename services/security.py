@@ -17,3 +17,11 @@ class SecurityLogService:
             state="LOGIN_FAILED",
         )
         return await self.repo.create(entry)
+
+    async def log_db_query_failed(self, ip: str, username: str, reason: str) -> SecurityLog:
+        entry = SecurityLog(
+            ip=ip,
+            details={"username": username, "reason": reason},
+            state="DB_QUERY_FAILED",
+        )
+        return await self.repo.create(entry)

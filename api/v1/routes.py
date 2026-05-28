@@ -9,6 +9,7 @@ from api.dependencies import (
     get_account_repo,
     get_account_service,
     get_audit_service,
+    get_auth_user_repo,
     get_security_log_service,
     get_transaction_service,
 )
@@ -18,12 +19,23 @@ from api.schemas import (
     AuditResolveRequest,
     FlaggedResponse,
     LoginRequest,
+    RegisterRequest,
+    RegisterResponse,
     TokenResponse,
     TransactionCreate,
+    TransactionQueryRequest,
+    TransactionResponse,
     TransactionResultResponse,
 )
 from core.config import settings
-from services.auth import AuthError, create_access_token, verify_access_token
+from infrastructure.models import AuthUser
+from services.auth import (
+    AuthError,
+    create_access_token,
+    hash_password,
+    verify_access_token,
+    verify_password,
+)
 
 auth_scheme = HTTPBearer(auto_error=False)
 
@@ -60,12 +72,21 @@ router = APIRouter(prefix="/api/v1")
 async def login(
     payload: LoginRequest,
     request: Request,
+    auth_context=Depends(get_auth_user_repo),
     context=Depends(get_security_log_service),
 ) -> TokenResponse:
-    if (
-        payload.username != settings.admin_username
-        or payload.password != settings.admin_password
-    ):
+    async with auth_context.session.begin():
+        user = await auth_context.repo.get_by_username(payload.username)
+
+    valid_user = user is not None and verify_password(
+        payload.password, user.password_hash
+    )
+    valid_admin = (
+        payload.username == settings.admin_username
+        and payload.password == settings.admin_password
+    )
+
+    if not (valid_user or valid_admin):
         client_ip = request.client.host if request.client else "unknown"
         async with context.session.begin():
             await context.service.log_login_failed(
@@ -80,6 +101,46 @@ async def login(
 
     token, expires_in = create_access_token(payload.username)
     return TokenResponse(access_token=token, expires_in=expires_in)
+
+
+@router.post(
+    "/auth/register",
+    response_model=RegisterResponse,
+    tags=["auth"],
+    summary="Register",
+    description="Creates a new user for JWT login.",
+    responses={
+        201: {"description": "User registered"},
+        409: {"description": "Username already exists"},
+    },
+    status_code=status.HTTP_201_CREATED,
+)
+async def register(
+    payload: RegisterRequest,
+    auth_context=Depends(get_auth_user_repo),
+) -> RegisterResponse:
+    async with auth_context.session.begin():
+        existing = await auth_context.repo.get_by_username(payload.username)
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="username already exists",
+            )
+
+        user = AuthUser(
+            username=payload.username,
+            password_hash=hash_password(payload.password),
+            role=payload.role,
+        )
+        await auth_context.repo.create(user)
+
+    token, expires_in = create_access_token(payload.username)
+    return RegisterResponse(
+        username=user.username,
+        role=user.role,
+        access_token=token,
+        expires_in=expires_in,
+    )
 
 
 @router.post(
@@ -138,6 +199,24 @@ async def resolve_flagged(
             auditor_notes=payload.auditor_notes,
         )
     return FlaggedResponse.model_validate(updated)
+
+
+@router.get(
+    "/flagged/pending",
+    response_model=list[FlaggedResponse],
+    tags=["audit"],
+    summary="List pending flagged transactions",
+    description="Returns flagged transactions pending manual review.",
+    responses={
+        200: {"description": "Flagged transactions returned"},
+    },
+)
+async def list_pending_flagged(
+    context: AuditServiceContext = Depends(get_audit_service),
+    _: str = Depends(require_auth),
+) -> list[FlaggedResponse]:
+    flagged = await context.service.list_pending()
+    return [FlaggedResponse.model_validate(item) for item in flagged]
 
 
 @router.post(
@@ -208,3 +287,44 @@ async def get_account(
             status_code=status.HTTP_404_NOT_FOUND, detail="not found"
         )
     return AccountResponse.model_validate(account)
+
+
+@router.post(
+    "/transactions/query",
+    response_model=list[TransactionResponse],
+    tags=["transactions"],
+    summary="Query recent transactions",
+    description="Queries recent transactions after validating DB credentials.",
+    responses={
+        200: {"description": "Transactions returned"},
+        401: {"description": "Invalid DB credentials"},
+    },
+)
+async def query_transactions(
+    payload: TransactionQueryRequest,
+    request: Request,
+    context: TransactionServiceContext = Depends(get_transaction_service),
+    security_context=Depends(get_security_log_service),
+    _: str = Depends(require_auth),
+) -> list[TransactionResponse]:
+    if (
+        payload.username != settings.db_query_username
+        or payload.password != settings.db_query_password
+    ):
+        client_ip = request.client.host if request.client else "unknown"
+        async with security_context.session.begin():
+            await security_context.service.log_db_query_failed(
+                ip=client_ip,
+                username=payload.username,
+                reason="invalid db credentials",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid db credentials",
+        )
+
+    transactions = await context.service.list_recent(
+        limit=payload.limit,
+        account_id=payload.account_id,
+    )
+    return [TransactionResponse.model_validate(item) for item in transactions]

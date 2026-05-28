@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from infrastructure.models import (
     Account,
     AccountState,
+    AuthUser,
     FlaggedTransaction,
     SecurityLog,
     Transaction,
@@ -97,6 +98,15 @@ class SqlAlchemyTransactionRepository:
         )
         return list(result.scalars().all())
 
+    async def list_recent(
+        self, limit: int, account_id: int | None = None
+    ) -> list[Transaction]:
+        stmt = select(Transaction).order_by(Transaction.timestamp.desc()).limit(limit)
+        if account_id is not None:
+            stmt = stmt.where(Transaction.account_id == account_id)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
 
 class SqlAlchemyFlaggedTransactionRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -133,6 +143,14 @@ class SqlAlchemyFlaggedTransactionRepository:
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def list_by_states(self, states: list[str]) -> list[FlaggedTransaction]:
+        result = await self._session.execute(
+            select(FlaggedTransaction)
+            .where(FlaggedTransaction.state.in_(states))
+            .order_by(FlaggedTransaction.timestamp.desc())
+        )
+        return list(result.scalars().all())
+
 
 class SqlAlchemySecurityLogRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -142,3 +160,19 @@ class SqlAlchemySecurityLogRepository:
         self._session.add(log_entry)
         await self._session.flush()
         return log_entry
+
+
+class SqlAlchemyAuthUserRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def get_by_username(self, username: str) -> AuthUser | None:
+        result = await self._session.execute(
+            select(AuthUser).where(AuthUser.username == username)
+        )
+        return result.scalar_one_or_none()
+
+    async def create(self, user: AuthUser) -> AuthUser:
+        self._session.add(user)
+        await self._session.flush()
+        return user

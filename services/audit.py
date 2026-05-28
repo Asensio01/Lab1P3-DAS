@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from repositories.interfaces import FlaggedTransactionRepository
+from infrastructure.models import AuditState
 from services.exceptions import NotFoundError, ValidationError
 
 
@@ -28,3 +29,8 @@ class AuditService:
         if updated is None:
             raise NotFoundError("flagged transaction not found")
         return updated
+
+    async def list_pending(self) -> list:
+        return await self._flagged_repo.list_by_states(
+            [AuditState.REVISION_PENDIENTE, AuditState.BAJO_REVISION]
+        )

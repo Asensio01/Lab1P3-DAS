@@ -109,7 +109,28 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=4, max_length=128)
 
 
+class RegisterRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=64)
+    password: str = Field(..., min_length=4, max_length=128)
+    role: str = Field("admin", min_length=3, max_length=32)
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class RegisterResponse(BaseModel):
+    username: str
+    role: str
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class TransactionQueryRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=64)
+    password: str = Field(..., min_length=4, max_length=128)
+    limit: int = Field(25, ge=1, le=200)
+    account_id: int | None = Field(default=None, ge=1)

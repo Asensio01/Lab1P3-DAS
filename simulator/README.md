@@ -8,3 +8,4 @@ Suggested next steps:
 - Add latency metrics and correlation IDs per request.
 - Support CLI flags for rate, duration, and base URL.
 - Add auth env vars (AUTH_USERNAME, AUTH_PASSWORD) to reuse backend login.
+- Add expired token simulation endpoint usage example.

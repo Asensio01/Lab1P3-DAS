@@ -151,4 +151,17 @@ class SecurityLog(Base):
     )
 
 
+class AuthUser(Base):
+    __tablename__ = "auth_user"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, server_default=text("'admin'"), nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=True
+    )
+
+
 Index("idx_transaction_account_time", Transaction.account_id, Transaction.timestamp)
+Index("idx_auth_user_username", AuthUser.username)

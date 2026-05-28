@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from api.v1.routes import router as api_router
@@ -17,6 +18,8 @@ from services.exceptions import (
     NotFoundError,
     ValidationError,
 )
+from services.auth import AuthError, verify_access_token
+from services.notifications import notification_hub
 
 configure_logging()
 logger = logging.getLogger("fintech_guard")
@@ -43,7 +46,35 @@ app = FastAPI(
         },
     ],
 )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"] ,
+    allow_headers=["*"] ,
+)
 app.include_router(api_router)
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    try:
+        verify_access_token(token)
+    except AuthError:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    await notification_hub.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await notification_hub.disconnect(websocket)
 
 
 @app.middleware("http")
