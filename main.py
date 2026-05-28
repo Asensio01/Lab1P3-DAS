@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from api.v1.routes import router as api_router
 from core.logging import configure_logging, get_correlation_id, set_correlation_id
@@ -46,6 +47,9 @@ app = FastAPI(
         },
     ],
 )
+
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],

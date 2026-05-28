@@ -49,18 +49,22 @@ Desde frontend/:
 - pnpm dev
 
 ## Rutas
-Frontend en:
+1) Frontend en:
 - http://localhost:5173
-Backend disponible en:
+2) Backend disponible en:
 - http://localhost:8000
 - Swagger: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
-Simulador disponible en:
+3) Simulador disponible en:
 - http://localhost:8001
 - Swagger: http://localhost:8001/docs
 - ReDoc: http://localhost:8001/redoc
-Netdata disponible en:
+4) Netdata disponible en:
 - http://localhost:19999
+5) Grafana disponible en:
+- http://localhost:3000
+6) Prometheus disponible en:
+- http://localhost:9090
 
 ## Probar el backend
 0) Registrar usuario (opcional):
