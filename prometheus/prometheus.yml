@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'fintech-backend'
+    scrape_interval: 8s
+    static_configs:
+      - targets: ['fintech_backend:8000'] 
+
+  - job_name: 'fintech-simulator'
+    static_configs:
+      - targets: ['fintech_simulator:8001']

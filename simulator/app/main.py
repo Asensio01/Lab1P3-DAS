@@ -10,6 +10,7 @@ from app.client import obtener_cuentas_candidatas_doble_pago, obtener_cuentas_ca
 from app.scenarios import ejecutar_ataque_race_condition, ejecutar_rafaga_fraude, generar_transaccion_normal
 from app.types import StressSimulationRequest
 from app.scenarios import ejecutar_rafaga_estres
+from prometheus_fastapi_instrumentator import Instrumentator
 
 # Ruta de la api
 base_api_url = f"{settings.BACKEND_URL.rstrip('/')}/api/v1"
@@ -53,6 +54,8 @@ async def lifespan(app: FastAPI):
     logger.info("Simulador apagado correctamente.")
 
 app = FastAPI(title="FinTech Guard - Simulator API", lifespan=lifespan)
+
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 @app.get("/status")
 def get_status():
