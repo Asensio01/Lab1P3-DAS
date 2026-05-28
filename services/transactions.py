@@ -16,6 +16,7 @@ from repositories.interfaces import (
     TransactionRepository,
 )
 from services.antifraud import AntifraudService
+from services.notifications import NotificationService
 from services.exceptions import (
     AccountBlockedError,
     ConcurrencyConflictError,
@@ -38,11 +39,13 @@ class TransactionService:
         transaction_repo: TransactionRepository,
         flagged_repo: FlaggedTransactionRepository,
         antifraud: AntifraudService,
+        notifier: NotificationService | None = None,
     ) -> None:
         self._account_repo = account_repo
         self._transaction_repo = transaction_repo
         self._flagged_repo = flagged_repo
         self._antifraud = antifraud
+        self._notifier = notifier
 
     async def submit_transaction(
         self,
@@ -60,8 +63,8 @@ class TransactionService:
         if account.state != AccountState.ACTIVO:
             raise AccountBlockedError("account is not active")
 
-        is_fraud = await self._antifraud.record_and_check(account_id, amount)
-        if is_fraud:
+        anomaly = await self._antifraud.record_and_check(account_id, ip, amount)
+        if anomaly:
             transaction = Transaction(
                 account_id=account_id,
                 ip=ip,
@@ -72,10 +75,24 @@ class TransactionService:
             await self._transaction_repo.create(transaction)
             flagged = FlaggedTransaction(
                 transaction_id=transaction.id,
-                anomaly="Pattern 3x 9000 < 10s",
+                anomaly=anomaly,
                 state=AuditState.REVISION_PENDIENTE,
             )
             await self._flagged_repo.create(flagged)
+            if self._notifier:
+                await self._notifier.notify_flagged(
+                    {
+                        "type": "flagged",
+                        "flagged_id": flagged.id,
+                        "transaction_id": transaction.id,
+                        "account_id": account_id,
+                        "amount": str(amount),
+                        "ip": ip,
+                        "country": country,
+                        "anomaly": anomaly,
+                        "state": flagged.state,
+                    }
+                )
             return TransactionResult(transaction=transaction, flagged=flagged)
 
         if account.balance is None or account.version is None:
@@ -100,3 +117,6 @@ class TransactionService:
         )
         await self._transaction_repo.create(transaction)
         return TransactionResult(transaction=transaction, flagged=None)
+
+    async def list_recent(self, limit: int, account_id: int | None = None) -> list[Transaction]:
+        return await self._transaction_repo.list_recent(limit=limit, account_id=account_id)

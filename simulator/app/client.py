@@ -3,6 +3,7 @@ import logging
 import httpx
 import asyncio
 import random
+import time
 from decimal import Decimal
 from app.config import settings
 from app.types import TransactionCreate
@@ -10,15 +11,44 @@ from app.types import TransactionCreate
 logger = logging.getLogger("simulator")
 base_api_url = f"{settings.BACKEND_URL.rstrip('/')}/api/v1"
 
+_access_token: str | None = None
+_access_token_expires_at: float = 0.0
+
+
+async def _login_for_token() -> tuple[str, int]:
+    async with httpx.AsyncClient(base_url=base_api_url, timeout=10.0) as client:
+        response = await client.post(
+            "/auth/login",
+            json={"username": settings.AUTH_USERNAME, "password": settings.AUTH_PASSWORD},
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"Login failed: {response.status_code} {response.text}")
+        payload = response.json()
+        return payload["access_token"], int(payload["expires_in"])
+
+
+async def get_access_token() -> str:
+    global _access_token, _access_token_expires_at
+    now = time.time()
+    if _access_token and now < (_access_token_expires_at - 5):
+        return _access_token
+
+    token, expires_in = await _login_for_token()
+    _access_token = token
+    _access_token_expires_at = now + expires_in
+    return token
+
 async def garantizar_cuentas_iniciales():
     """
     Verifica si el backend tiene cuentas para transaccionar. 
     Si no existen, crea un set de cuentas base automatizadas.
     """
+    token = await get_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(base_url=base_api_url, timeout=10.0) as client:
         try:
             # Intentamos verificar si la cuenta 1 existe (o puedes crear un endpoint /accounts/ para verificar)
-            response = await client.get("/accounts/1")
+            response = await client.get("/accounts/1", headers=headers)
             if response.status_code == 200:
                 logger.info("Cuentas base detectadas en el sistema.")
                 return [1, 2] # IDs asumidos que ya existen
@@ -35,7 +65,7 @@ async def garantizar_cuentas_iniciales():
                 "state": "Activo"
             }
             try:
-                res = await client.post("/accounts", json=payload)
+                res = await client.post("/accounts", json=payload, headers=headers)
                 if res.status_code in (200, 201):
                     data = res.json()
                     cuentas_creadas.append(data["id"])
@@ -52,10 +82,16 @@ async def enviar_transaccion(tx: TransactionCreate, max_retries: int = 5):
     """
     # Configuramos un timeout explícito y más holgado de 30 segundos para soportar el estrés
     limits = httpx.Limits(max_keepalive_connections=100, max_connections=200)
+    token = await get_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(base_url=base_api_url, timeout=30.0, limits=limits) as client:
         for intento in range(1, max_retries + 1):
             try:
-                response = await client.post("/transactions", json=tx.model_dump(mode="json"))
+                response = await client.post(
+                    "/transactions",
+                    json=tx.model_dump(mode="json"),
+                    headers=headers,
+                )
                 
                 if response.status_code in (200, 201):
                     logger.info(f"✅ Transacción exitosa -> Cuenta: {tx.account_id} | Monto: ${tx.amount}")
@@ -100,11 +136,13 @@ async def obtener_cuentas_candidatas_fraude() -> list[dict]:
     """
     cuentas_aptas = []
     
+    token = await get_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(base_url=base_api_url, timeout=5.0) as client:
         # Consultamos las primeras cuentas del sistema (ej: IDs del 1 al 10)
         for account_id in range(1, 50):
             try:
-                res = await client.get(f"/accounts/{account_id}")
+                res = await client.get(f"/accounts/{account_id}", headers=headers)
                 if res.status_code == 200:
                     acc = res.json()
                     # Validamos requisitos estructurales de la DB
@@ -123,11 +161,13 @@ async def obtener_cuentas_candidatas_estres() -> list[dict]:
     """
     cuentas_ids = []
     
+    token = await get_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(base_url=base_api_url, timeout=5.0) as client:
         # Consultamos las primeras cuentas del sistema (ej: IDs del 1 al 10)
         for account_id in range(1, 50):
             try:
-                res = await client.get(f"/accounts/{account_id}")
+                res = await client.get(f"/accounts/{account_id}", headers=headers)
                 if res.status_code == 200:
                     acc = res.json()
                     # Validamos requisitos estructurales de la DB
@@ -146,11 +186,13 @@ async def obtener_cuentas_candidatas_doble_pago() -> list[dict]:
     """
     cuentas_aptas = []
     
+    token = await get_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(base_url=base_api_url, timeout=5.0) as client:
         # Consultamos las primeras cuentas del sistema (ej: IDs del 1 al 15)
         for account_id in range(1, 15):
             try:
-                res = await client.get(f"/accounts/{account_id}")
+                res = await client.get(f"/accounts/{account_id}", headers=headers)
                 if res.status_code == 200:
                     acc = res.json()
                     balance = Decimal(str(acc.get("balance", "0") or "0"))
@@ -163,13 +205,32 @@ async def obtener_cuentas_candidatas_doble_pago() -> list[dict]:
 
 async def enviar_transaccion_con_feedback(tx: TransactionCreate) -> dict:
     """Envía una transacción sin reintentos automáticos para evaluar si el backend frena el choque."""
-    
+
+    token = await get_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(base_url=base_api_url) as client:
         try:
-            response = await client.post("/transactions", json=tx.model_dump(mode="json"))
+            response = await client.post(
+                "/transactions",
+                json=tx.model_dump(mode="json"),
+                headers=headers,
+            )
             return {
                 "status": response.status_code,
                 "detail": response.json() if response.status_code in (200, 201, 409, 403, 400) else response.text
             }
         except Exception as e:
             return {"status": 500, "detail": f"Error de conexión: {str(e)}"}
+
+
+async def verificar_token_expirado(account_id: int) -> dict:
+    token, expires_in = await _login_for_token()
+    await asyncio.sleep(expires_in + 1)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with httpx.AsyncClient(base_url=base_api_url, timeout=10.0) as client:
+        response = await client.get(f"/accounts/{account_id}", headers=headers)
+        return {
+            "status": response.status_code,
+            "detail": response.json() if response.status_code in (200, 401, 403, 404) else response.text,
+        }

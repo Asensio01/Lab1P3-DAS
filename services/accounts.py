@@ -36,3 +36,6 @@ class AccountService:
             state=state,
         )
         return await self._account_repo.create(account)
+
+    async def get_all_active_accounts(self, min_balance: Decimal) -> list[Account]:
+        return await self._account_repo.list_active(min_balance)
