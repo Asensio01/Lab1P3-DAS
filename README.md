@@ -88,6 +88,25 @@ Desde frontend/:
 6) Consultar transacciones con credencial DB:
 - curl -X POST http://localhost:8000/api/v1/transactions/query -H "Content-Type: application/json" -H "Authorization: Bearer <TOKEN>" -d "{\"username\":\"auditor\",\"password\":\"<PASSWORD>\",\"limit\":25}"
 
+## Generar Dashboard en Grafana
+0) Ir a http://localhost:3000
+
+1) Iniciar sesion en grafana
+- Credenciales primera vez, user: admin password: admin
+- Crear nueva contrasena
+
+2) En el menu lateral izquierdo seleccionar Connections > Data Source
+- Crear nuevo Data Source
+- Seleccionar prometheus
+- En seccion Connection la url es http://prometheus:9090
+- Ir al final y clic save & test
+
+3) En el menu lateral izquierdo ir a Dashboards
+- Clic en New
+- Seleccionar Import
+- Arrastrar FintechGuard_DashboardGrafana.json
+- Clic Import
+
 ## Notas y troubleshooting
 - Los logs de GET / repetidos son del healthcheck del backend.
 - Si Postgres falla con la version 18, hacer down -v y levantar de nuevo.
