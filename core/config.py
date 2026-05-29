@@ -7,7 +7,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="forbid",
+        extra="ignore",
     )
 
     postgres_dsn: PostgresDsn = Field(..., alias="POSTGRES_DSN")
@@ -24,6 +24,20 @@ class Settings(BaseSettings):
     )
 
     postgres_password: str | None = Field(None, alias="POSTGRES_PASSWORD")
+
+    jwt_secret: str = Field(..., alias="JWT_SECRET")
+    jwt_issuer: str = Field("fintech-guard", alias="JWT_ISSUER")
+    jwt_audience: str = Field("fintech-guard-api", alias="JWT_AUDIENCE")
+    jwt_exp_seconds: int = Field(900, alias="JWT_EXP_SECONDS", ge=30)
+
+    ip_burst_window_seconds: int = Field(60, alias="IP_BURST_WINDOW_SECONDS", ge=1)
+    ip_burst_max: int = Field(50, alias="IP_BURST_MAX", ge=1)
+
+    admin_username: str = Field("admin", alias="ADMIN_USERNAME")
+    admin_password: str = Field(..., alias="ADMIN_PASSWORD")
+
+    db_query_username: str = Field("auditor", alias="DB_QUERY_USERNAME")
+    db_query_password: str = Field(..., alias="DB_QUERY_PASSWORD")
 
     environment: str = Field("production", alias="APP_ENV")
     log_level: str = Field("INFO", alias="LOG_LEVEL")

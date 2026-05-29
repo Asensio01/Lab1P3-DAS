@@ -2,9 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 
 type ConnectionState = "connecting" | "open" | "closed" | "error";
 
-export function useWebSocket() {
+type WsEvent = {
+  type: string;
+  [key: string]: unknown;
+};
+
+export function useWebSocket(token?: string) {
   const [state, setState] = useState<ConnectionState>("connecting");
   const [lastMessage, setLastMessage] = useState<string | null>(null);
+  const [lastEvent, setLastEvent] = useState<WsEvent | null>(null);
 
   const url = useMemo(() => {
     const base = import.meta.env.VITE_WS_URL as string | undefined;
@@ -17,15 +23,28 @@ export function useWebSocket() {
   }, []);
 
   useEffect(() => {
-    const socket = new WebSocket(url);
+    if (!token) {
+      setState("closed");
+      return;
+    }
+
+    const socket = new WebSocket(`${url}?token=${encodeURIComponent(token)}`);
 
     socket.onopen = () => setState("open");
     socket.onerror = () => setState("error");
     socket.onclose = () => setState("closed");
-    socket.onmessage = (event) => setLastMessage(event.data);
+    socket.onmessage = (event) => {
+      setLastMessage(event.data);
+      try {
+        const parsed = JSON.parse(event.data) as WsEvent;
+        setLastEvent(parsed);
+      } catch {
+        setLastEvent(null);
+      }
+    };
 
     return () => socket.close();
-  }, [url]);
+  }, [url, token]);
 
-  return { state, lastMessage, url };
+  return { state, lastMessage, lastEvent, url };
 }

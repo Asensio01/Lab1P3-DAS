@@ -60,3 +60,14 @@ CREATE TABLE IF NOT EXISTS security_logs (
     state TEXT NOT NULL,
     timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Usuarios de autenticacion (login/register)
+CREATE TABLE IF NOT EXISTS auth_user (
+    id BIGSERIAL PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'admin',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_user_username ON auth_user(username);

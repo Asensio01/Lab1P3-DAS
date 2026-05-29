@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     PORT: int = 8001
     INTERVALO_SEGUNDOS: float = 2.0
 
+    AUTH_USERNAME: str = "admin"
+    AUTH_PASSWORD: str = ""
+
     # Esta línea le dice a Pydantic que ignore las variables sobrantes (POSTGRES, VITE, etc.)
     model_config = SettingsConfigDict(
         env_file=".env",

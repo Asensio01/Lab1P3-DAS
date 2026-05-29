@@ -1,4 +1,6 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+
 import { Card } from "@/components/ui/card";
 import { StatusPill } from "@/components/StatusPill";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -15,82 +17,87 @@ interface Transaction {
   account: string;
 }
 
-const normalizeStatus = (rawStatus: unknown, amount: number): Transaction["status"] => {
-  const status = String(rawStatus ?? "").toLowerCase();
-  if (status.includes("aprob") || status.includes("approved")) {
-    return "Approved";
-  }
-  if (status.includes("bloque") || status.includes("rechaz")) {
-    return "Blocked";
-  }
-  if (status.includes("revision") || status.includes("under review") || status.includes("pending")) {
-    return "Under Review";
-  }
-  return amount >= 9000 ? "Under Review" : "Approved";
+type FlaggedItem = {
+  id: number;
+  transaction_id: number | null;
+  anomaly: string;
+  state: string | null;
+  timestamp: string | null;
 };
 
 export default function App() {
-  const { state, url, lastMessage } = useWebSocket();
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("");
+  const [token, setToken] = useState(() => localStorage.getItem("authToken") ?? "");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
-  // Efecto para escuchar el WebSocket e inyectar datos en tiempo real
-  useEffect(() => {
-    if (lastMessage) {
-      try {
-        const data = JSON.parse(lastMessage);
-        const payload: Record<string, unknown> = data.transaction ?? data;
-        const flagged: Record<string, unknown> | undefined = data.flagged;
-        const amount = Number(payload.amount ?? data.amount ?? 0);
-        const rawAccountId = payload.account_id ?? data.account_id;
-        const account =
-          String(
-            payload.account ??
-              data.account ??
-              (typeof rawAccountId === "number" || typeof rawAccountId === "string"
-                ? `ACC-${rawAccountId}`
-                : "")
-          ) || "ACC-UNKNOWN";
+  const apiBase = useMemo(() => {
+    return (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
+      "http://localhost:8000";
+  }, []);
 
-        const newTx: Transaction = {
-          id:
-            String(payload.transaction_id ?? payload.id ?? data.transaction_id ?? data.id ?? "") ||
-            `T-${Math.floor(1000 + Math.random() * 9000)}`,
-          amount,
-          country: String(payload.country ?? data.country ?? data.country_origin ?? "Global Network"),
-          anomaly:
-            String(flagged?.anomaly ?? data.anomaly ?? data.anomaly_type ?? "") ||
-            (amount >= 9000 ? "Monto Inusual" : "Normal"),
-          status: normalizeStatus(payload.state ?? payload.status ?? data.status, amount),
-          timestamp:
-            String(payload.timestamp ?? flagged?.timestamp ?? data.timestamp ?? new Date().toISOString()),
-          ip: String(payload.ip ?? data.ip ?? "127.0.0.1"),
-          account,
-        };
+  const { state, url, lastMessage, lastEvent } = useWebSocket(token);
 
-        setTransactions((prev) => [newTx, ...prev].slice(0, 50));
-      } catch (e) {
-        console.error("Error parseando el stream transaccional:", e);
+  const {
+    data: flaggedQueue,
+    refetch: refetchFlagged,
+    isFetching
+  } = useQuery({
+    queryKey: ["flagged", token],
+    queryFn: async (): Promise<FlaggedItem[]> => {
+      const response = await fetch(`${apiBase}/api/v1/flagged/pending`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+      if (!response.ok) {
+        throw new Error("Failed to load flagged queue");
       }
-    }
-  }, [lastMessage]);
+      return response.json();
+    },
+    enabled: Boolean(token),
+    refetchInterval: 5000
+  });
 
-  // Manejadores de acciones de auditoría (Simulados hacia el Backend / Estado Local)
-  const handleUpdateStatus = (id: string, newStatus: "Blocked" | "Approved") => {
-    setTransactions((prev) =>
-      prev.map((tx) => (tx.id === id ? { ...tx, status: newStatus } : tx))
-    );
-    if (selectedTx && selectedTx.id === id) {
-      setSelectedTx((prev) => prev ? { ...prev, status: newStatus } : null);
+  useEffect(() => {
+    if (lastEvent?.type === "flagged") {
+      refetchFlagged();
     }
-    // NOTA: Aquí iría tu mutación de TanStack Query hacia la API REST del backend:
-    // mutation.mutate({ id, status: newStatus, justified_by: "Analista SOC" });
+  }, [lastEvent, refetchFlagged]);
+
+  const kpis = [
+    { label: "Transacciones activas", value: "1,248" },
+    { label: "Alertas en revision", value: String(flaggedQueue?.length ?? 0) },
+    { label: "Latencia promedio", value: "120ms" }
+  ];
+
+  const handleLogin = async () => {
+    setIsLoggingIn(true);
+    setLoginError(null);
+    try {
+      const response = await fetch(`${apiBase}/api/v1/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      });
+      if (!response.ok) {
+        throw new Error("Invalid credentials");
+      }
+      const payload = await response.json();
+      setToken(payload.access_token);
+      localStorage.setItem("authToken", payload.access_token);
+    } catch (error) {
+      setLoginError((error as Error).message);
+    } finally {
+      setIsLoggingIn(false);
+    }
   };
 
-  // KPIs dinámicos calculados directamente del estado reactivo
-  const activeTxs = transactions.length + 1248; // Base estática + flujos en tiempo real
-  const underReviewCount = transactions.filter(t => t.status === "Under Review").length + 14;
-  const blockedCount = transactions.filter(t => t.status === "Blocked").length;
+  const handleLogout = () => {
+    setToken("");
+    localStorage.removeItem("authToken");
+  };
 
   return (
     <div className="page-shell px-4 py-8 md:px-12 md:py-10 text-white">
@@ -112,24 +119,81 @@ export default function App() {
           </div>
         </header>
 
-        {/* Métricas Dinámicas (Sensado en Tiempo Real) */}
-        <section className="grid gap-4 md:grid-cols-4">
-          <Card className="panel p-4 flex flex-col justify-between">
-            <span className="text-xs text-white/50 font-medium">Transacciones Totales</span>
-            <span className="text-3xl font-bold tracking-tight mt-2 text-white font-mono">{activeTxs}</span>
+        <section className="grid gap-6 md:grid-cols-[2fr_1fr]">
+          <Card className="stagger">
+            <h2 className="text-xl font-semibold">Acceso administrativo</h2>
+            <p className="mt-2 text-sm text-white/60">
+              Inicia sesion para monitorear alertas y recibir notificaciones.
+            </p>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <input
+                className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white"
+                placeholder="Usuario"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+              />
+              <input
+                className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white"
+                placeholder="Password"
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                className="rounded-full bg-mint px-4 py-2 text-xs font-semibold uppercase tracking-[0.25em] text-black"
+                onClick={handleLogin}
+                disabled={isLoggingIn}
+              >
+                {isLoggingIn ? "Validando..." : "Iniciar sesion"}
+              </button>
+              {token && (
+                <button
+                  className="rounded-full border border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.25em] text-white/70"
+                  onClick={handleLogout}
+                >
+                  Cerrar sesion
+                </button>
+              )}
+              {loginError && (
+                <span className="text-sm text-ember">{loginError}</span>
+              )}
+            </div>
           </Card>
-          <Card className="panel p-4 border-l-2 border-l-amber-500 flex flex-col justify-between">
-            <span className="text-xs text-amber-400/80 font-medium">En Revisión Manual</span>
-            <span className="text-3xl font-bold tracking-tight mt-2 text-amber-400 font-mono">{underReviewCount}</span>
+          <Card className="stagger">
+            <h2 className="text-xl font-semibold">Cola de revision manual</h2>
+            <p className="mt-2 text-sm text-white/60">
+              {token
+                ? "Alertas pendientes de evaluacion."
+                : "Inicia sesion para visualizar la cola."}
+            </p>
+            <div className="mt-4 space-y-3 text-sm text-white/70">
+              {(flaggedQueue ?? []).slice(0, 4).map((item) => (
+                <div key={item.id} className="rounded-lg border border-white/10 px-3 py-2">
+                  <div className="text-xs text-white/60">#{item.id} - {item.anomaly}</div>
+                  <div className="text-[11px] text-white/40">
+                    Estado: {item.state ?? "Revision Pendiente"}
+                  </div>
+                </div>
+              ))}
+              {token && (flaggedQueue?.length ?? 0) === 0 && !isFetching && (
+                <div className="text-white/50">No hay alertas activas.</div>
+              )}
+              {isFetching && <div className="text-white/50">Cargando cola...</div>}
+            </div>
           </Card>
-          <Card className="panel p-4 border-l-2 border-l-rose-500 flex flex-col justify-between">
-            <span className="text-xs text-rose-400/80 font-medium">Operaciones Bloqueadas</span>
-            <span className="text-3xl font-bold tracking-tight mt-2 text-rose-400 font-mono">{blockedCount}</span>
-          </Card>
-          <Card className="panel p-4 flex flex-col justify-between">
-            <span className="text-xs text-white/50 font-medium">Latencia del Motor</span>
-            <span className="text-3xl font-bold tracking-tight mt-2 text-emerald-400 font-mono">1.2 ms</span>
-          </Card>
+        </section>
+
+        <section className="grid gap-6 md:grid-cols-3">
+          {kpis.map((kpi) => (
+            <Card key={kpi.label} className="stagger">
+              <div className="text-sm text-white/60">{kpi.label}</div>
+              <div className="mt-3 text-3xl font-semibold text-white">
+                {kpi.value}
+              </div>
+            </Card>
+          ))}
         </section>
 
         {/* Cuerpo Principal del Dashboard */}
