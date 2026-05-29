@@ -16,3 +16,7 @@ class StressSimulationRequest(BaseModel):
 
 class RaceConditionRequest(BaseModel):
     cantidad_cuentas: int = Field(..., ge=1, description="Número de cuentas en las que se probará la Race Condition")
+
+
+class ExpiredTokenRequest(BaseModel):
+    account_id: int = Field(1, ge=1, description="Cuenta que se usará para probar token expirado")

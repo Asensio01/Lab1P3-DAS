@@ -4,13 +4,23 @@ from contextlib import asynccontextmanager
 import logging
 import random
 from app.config import settings
-from fastapi import FastAPI, APIRouter, HTTPException, status
-from app.types import FraudSimulationRequest, RaceConditionRequest
-from app.client import obtener_cuentas_candidatas_doble_pago, obtener_cuentas_candidatas_fraude, garantizar_cuentas_iniciales, enviar_transaccion, obtener_cuentas_candidatas_estres
+from fastapi import FastAPI, APIRouter, HTTPException, status, Depends
+from app.types import ExpiredTokenRequest, FraudSimulationRequest, RaceConditionRequest
+from app.client import (
+    obtener_cuentas_candidatas_doble_pago,
+    obtener_cuentas_candidatas_fraude,
+    garantizar_cuentas_iniciales,
+    enviar_transaccion,
+    obtener_cuentas_candidatas_estres,
+    verificar_token_expirado,
+)
 from app.scenarios import ejecutar_ataque_race_condition, ejecutar_rafaga_fraude, generar_transaccion_normal
 from app.types import StressSimulationRequest
 from app.scenarios import ejecutar_rafaga_estres
 from prometheus_fastapi_instrumentator import Instrumentator
+from fastapi.security import HTTPBearer
+from fastapi.openapi.models import OAuthFlows as OAuthFlowsModel
+from fastapi.openapi.utils import get_openapi
 
 # Ruta de la api
 base_api_url = f"{settings.BACKEND_URL.rstrip('/')}/api/v1"
@@ -18,6 +28,12 @@ base_api_url = f"{settings.BACKEND_URL.rstrip('/')}/api/v1"
 # Configurar logs legibles en la consola de Docker
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("simulator")
+
+#Schema de seguridad
+security_scheme = HTTPBearer(
+    scheme_name="BearerAuth",
+    description="Escribe tu token JWT aquí para autorizar las peticiones del simulador."
+)
 
 # Variable global para controlar la ejecución del bucle
 simulador_activo = True
@@ -56,6 +72,30 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="FinTech Guard - Simulator API", lifespan=lifespan)
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    openapi_schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "Pega tu token JWT aquí."
+        }
+    }
+    # Aplica el candado visual a todos los endpoints del Swagger
+    openapi_schema["security"] = [{"BearerAuth": []}]
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
 
 @app.get("/status")
 def get_status():
@@ -173,4 +213,20 @@ async def activar_simulacion_race_condition(payload: RaceConditionRequest):
         "status": "completed",
         "resumen": f"Prueba realizada con éxito en {payload.cantidad_cuentas} cuentas.",
         "reporte": reporte_final
+    }
+
+
+@app.post(
+    "/api/v1/simulations/expired-token",
+    status_code=status.HTTP_200_OK,
+    tags=["Simulación"],
+)
+async def activar_simulacion_token_expirado(payload: ExpiredTokenRequest):
+    """
+    Solicita un token de login, espera a que expire y prueba acceso al backend.
+    """
+    resultado = await verificar_token_expirado(payload.account_id)
+    return {
+        "status": "completed",
+        "resultado": resultado,
     }

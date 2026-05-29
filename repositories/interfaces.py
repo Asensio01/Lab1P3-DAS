@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
-from infrastructure.models import Account, FlaggedTransaction, SecurityLog, Transaction
+from infrastructure.models import Account, AuthUser, FlaggedTransaction, SecurityLog, Transaction
 
 
 class AccountRepository(Protocol):
@@ -23,6 +23,8 @@ class AccountRepository(Protocol):
         self, account_id: int, expected_version: int, delta: Decimal
     ) -> Account | None: ...
 
+    async def list_active(self, min_balance: Decimal) -> list[Account]: ...
+
 
 class TransactionRepository(Protocol):
     async def get_by_id(self, transaction_id: int) -> Transaction | None: ...
@@ -31,6 +33,10 @@ class TransactionRepository(Protocol):
 
     async def list_recent_by_account(
         self, account_id: int, since: datetime
+    ) -> list[Transaction]: ...
+
+    async def list_recent(
+        self, limit: int, account_id: int | None = None
     ) -> list[Transaction]: ...
 
 
@@ -49,12 +55,24 @@ class FlaggedTransactionRepository(Protocol):
         resolved_at: datetime | None,
     ) -> FlaggedTransaction | None: ...
 
+    async def list_by_states(self, states: list[str]) -> list[FlaggedTransaction]: ...
+
 
 class SecurityLogRepository(Protocol):
     async def create(self, log_entry: SecurityLog) -> SecurityLog: ...
 
 
+class AuthUserRepository(Protocol):
+    async def get_by_username(self, username: str) -> AuthUser | None: ...
+
+    async def create(self, user: AuthUser) -> AuthUser: ...
+
+
 class RedisFraudRepository(Protocol):
     async def record_and_count(
         self, account_id: int, timestamp_ms: int, window_seconds: int
+    ) -> int: ...
+
+    async def record_and_count_ip(
+        self, ip: str, timestamp_ms: int, window_seconds: int
     ) -> int: ...
