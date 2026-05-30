@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Iterable
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from infrastructure.models import (
@@ -54,10 +54,28 @@ class SqlAlchemyAccountRepository:
     async def update_balance_with_version(
         self, account_id: int, expected_version: int, delta: Decimal
     ) -> Account | None:
+        return await self.update_balances_with_version(
+            account_id=account_id,
+            expected_version=expected_version,
+            balance_delta=delta,
+            reserved_delta=Decimal("0"),
+        )
+
+    async def update_balances_with_version(
+        self,
+        account_id: int,
+        expected_version: int,
+        balance_delta: Decimal,
+        reserved_delta: Decimal,
+    ) -> Account | None:
         stmt = (
             update(Account)
             .where(Account.id == account_id, Account.version == expected_version)
-            .values(balance=Account.balance + delta, version=Account.version + 1)
+            .values(
+                balance=Account.balance + balance_delta,
+                reserved_balance=Account.reserved_balance + reserved_delta,
+                version=Account.version + 1,
+            )
             .returning(Account)
         )
         result = await self._session.execute(stmt)
@@ -67,7 +85,8 @@ class SqlAlchemyAccountRepository:
         result = await self._session.execute(
             select(Account).where(
                 Account.state == AccountState.ACTIVO,
-                Account.balance >= min_balance,
+                (Account.balance - func.coalesce(Account.reserved_balance, 0))
+                >= min_balance,
             )
         )
         return list(result.scalars().all())
@@ -87,6 +106,18 @@ class SqlAlchemyTransactionRepository:
         self._session.add(transaction)
         await self._session.flush()
         return transaction
+
+    async def update_state(
+        self, transaction_id: int, state: str
+    ) -> Transaction | None:
+        stmt = (
+            update(Transaction)
+            .where(Transaction.id == transaction_id)
+            .values(state=state)
+            .returning(Transaction)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()
 
     async def list_recent_by_account(
         self, account_id: int, since: datetime
@@ -111,6 +142,12 @@ class SqlAlchemyTransactionRepository:
 class SqlAlchemyFlaggedTransactionRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def get_by_id(self, flagged_id: int) -> FlaggedTransaction | None:
+        result = await self._session.execute(
+            select(FlaggedTransaction).where(FlaggedTransaction.id == flagged_id)
+        )
+        return result.scalar_one_or_none()
 
     async def get_by_transaction_id(
         self, transaction_id: int

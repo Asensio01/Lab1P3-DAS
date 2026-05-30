@@ -5,12 +5,25 @@
 :root {
   color-scheme: dark;
   font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  --bg-0: #06080f;
+  --bg-1: #0b1020;
+  --bg-2: #0f172a;
+  --ink-0: #e2e8f0;
+  --ink-1: #94a3b8;
+  --accent: #22d3ee;
+  --mint: #34d399;
+  --amber: #f59e0b;
+  --rose: #fb7185;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  background: radial-gradient(circle at top, #1b2336 0%, #0b0d12 60%);
+  background:
+    radial-gradient(900px 500px at 10% -10%, rgba(34, 211, 238, 0.16), transparent 60%),
+    radial-gradient(700px 420px at 85% -20%, rgba(52, 211, 153, 0.12), transparent 65%),
+    radial-gradient(600px 420px at 70% 110%, rgba(245, 158, 11, 0.1), transparent 60%),
+    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 70%);
 }
 
 .page-shell {
@@ -22,6 +35,112 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(14, 17, 25, 0.85);
   backdrop-filter: blur(12px);
+}
+
+.wallet-card {
+  background:
+    linear-gradient(135deg, rgba(34, 211, 238, 0.14), rgba(15, 23, 42, 0.9)),
+    radial-gradient(circle at 10% 20%, rgba(52, 211, 153, 0.18), transparent 55%),
+    radial-gradient(circle at 85% 80%, rgba(248, 113, 113, 0.12), transparent 50%);
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  box-shadow: 0 18px 40px rgba(7, 10, 20, 0.6), inset 0 0 30px rgba(34, 211, 238, 0.08);
+}
+
+.wallet-chip {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.6);
+  color: var(--ink-1);
+}
+
+.wallet-amount {
+  letter-spacing: -0.02em;
+  text-shadow: 0 0 24px rgba(34, 211, 238, 0.35);
+}
+
+.glass-panel {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(10, 15, 27, 0.7);
+  box-shadow: 0 18px 40px rgba(5, 7, 15, 0.55);
+}
+
+.tx-row {
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(8, 12, 20, 0.7);
+}
+
+.status-pill {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.debit-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 22px;
+  background:
+    radial-gradient(140px 120px at 80% 20%, rgba(34, 211, 238, 0.35), transparent 70%),
+    radial-gradient(200px 140px at 20% 80%, rgba(244, 114, 182, 0.25), transparent 70%),
+    linear-gradient(135deg, rgba(12, 18, 32, 0.95), rgba(14, 23, 42, 0.9));
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  box-shadow: 0 24px 50px rgba(5, 8, 16, 0.7), inset 0 0 40px rgba(34, 211, 238, 0.08);
+}
+
+.debit-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent 30%, rgba(255, 255, 255, 0.06), transparent 70%);
+  animation: sweep 6s ease-in-out infinite;
+}
+
+.debit-chip {
+  width: 46px;
+  height: 36px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(234, 179, 8, 0.8), rgba(248, 250, 252, 0.2));
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.2);
+}
+
+.debit-stripe {
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.9));
+}
+
+.debit-emoji {
+  font-size: 28px;
+  filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.45));
+}
+
+.send-panel {
+  border: 1px solid rgba(34, 211, 238, 0.2);
+  background: rgba(10, 14, 24, 0.85);
+}
+
+@keyframes sweep {
+  0%,
+  100% {
+    transform: translateX(-40%);
+  }
+  50% {
+    transform: translateX(40%);
+  }
+}
+
+.balance-sheen {
+  animation: glowPulse 3.6s ease-in-out infinite;
+}
+
+@keyframes glowPulse {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.88;
+  }
+  50% {
+    transform: translateY(-2px);
+    opacity: 1;
+  }
 }
 
 .stagger > * {

@@ -11,6 +11,9 @@ class AccountService:
     def __init__(self, account_repo: AccountRepository) -> None:
         self._account_repo = account_repo
 
+    async def get_by_user_name(self, user_name: str) -> Account | None:
+        return await self._account_repo.get_by_user_name(user_name)
+
     async def create_account(
         self,
         user_name: str,

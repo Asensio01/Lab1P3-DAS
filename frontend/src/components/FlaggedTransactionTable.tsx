@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { clsx } from "clsx";
 import { useMutation } from "@/hooks/useMutation";
-import { apiClient, type TxStatusPayload } from "@/lib/api";
+import { apiClient, type AuditDecision } from "@/lib/api";
 
 export type UiStatus = "Under Review" | "Aprobada" | "Rechazada" | "Bloqueada";
 
 export interface FlaggedTransaction {
   id: string;
+  flaggedId: number;
   transactionId: number;
   amount: number;
   country: string;
@@ -21,10 +22,11 @@ export interface FlaggedTransaction {
 export interface FlaggedTransactionTableProps {
   transactions: FlaggedTransaction[];
   isLoading?: boolean;
+  onSelect?: (transaction: FlaggedTransaction | null) => void;
   onTransactionAction?: (
     transaction: FlaggedTransaction,
     payload: {
-      status: TxStatusPayload;
+      status: AuditDecision;
       optimistic: boolean;
       previousStatus: UiStatus;
       error?: string;
@@ -51,6 +53,7 @@ function anomalyBadgeColor(anomaly: string): string {
 export function FlaggedTransactionTable({
   transactions,
   isLoading,
+  onSelect,
   onTransactionAction,
 }: FlaggedTransactionTableProps): React.ReactElement {
   const [selectedRow, setSelectedRow] = useState<string | null>(null);
@@ -77,8 +80,12 @@ export function FlaggedTransactionTable({
 
   const patchStatusMutation = useMutation(
     async (data: unknown) => {
-      const vars = data as { txId: number; status: TxStatusPayload };
-      return apiClient.patchTransactionStatus(vars.txId, vars.status);
+      const vars = data as {
+        flaggedId: number;
+        decision: AuditDecision;
+        notes?: string;
+      };
+      return apiClient.resolveFlagged(vars.flaggedId, vars.decision, vars.notes);
     }
   );
 
@@ -94,26 +101,30 @@ export function FlaggedTransactionTable({
   );
 
   const handleUpdateStatus = useCallback(
-    async (tx: FlaggedTransaction, next: TxStatusPayload): Promise<void> => {
+    async (tx: FlaggedTransaction, next: AuditDecision): Promise<void> => {
       const ok = confirm(
-        next === "Bloqueada"
+        next === "Bloqueado"
           ? `Bloquear cuenta de ${tx.account}?`
-          : next === "Aprobada"
+          : next === "Aprobado"
             ? `Aprobar transacción ${tx.id}?`
-            : `Rechazar transacción ${tx.id}?`
+            : `Resolver transacción ${tx.id}?`
       );
       if (!ok) return;
+
+      const notes = prompt("Notas del auditor (opcional):") ?? undefined;
 
       const actionKey = `tx-${tx.transactionId}-${next}`;
       const previousStatus = tx.status;
       const previousRows = localTransactions;
+
+      const nextUiStatus = next === "Aprobado" ? "Aprobada" : "Bloqueada";
 
       setActionStatus((prev) => ({
         ...prev,
         [actionKey]: { type: "loading", message: "Procesando..." },
       }));
 
-      applyOptimistic(tx.transactionId, next);
+      applyOptimistic(tx.transactionId, nextUiStatus);
       onTransactionAction?.(tx, {
         status: next,
         optimistic: true,
@@ -122,8 +133,9 @@ export function FlaggedTransactionTable({
 
       try {
         await patchStatusMutation.mutate({
-          txId: tx.transactionId,
-          status: next,
+          flaggedId: tx.flaggedId,
+          decision: next,
+          notes,
         });
 
         setActionStatus((prev) => ({
@@ -189,7 +201,13 @@ export function FlaggedTransactionTable({
               "hover:border-white/20",
               selectedRow === tx.id && "border-emerald-500/50 bg-emerald-950/10"
             )}
-            onClick={() => setSelectedRow((prev) => (prev === tx.id ? null : tx.id))}
+            onClick={() => {
+              setSelectedRow((prev) => {
+                const next = prev === tx.id ? null : tx.id;
+                onSelect?.(next ? tx : null);
+                return next;
+              });
+            }}
           >
             <div className="mb-3 flex items-center justify-between gap-4">
               <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -269,7 +287,7 @@ export function FlaggedTransactionTable({
                 <div className="flex flex-wrap gap-2 border-t border-white/5 pt-2">
                   <button
                     type="button"
-                    onClick={() => void handleUpdateStatus(tx, "Bloqueada")}
+                    onClick={() => void handleUpdateStatus(tx, "Bloqueado")}
                     disabled={txPending}
                     className={clsx(
                       "rounded px-3 py-1 text-xs font-medium transition-colors",
@@ -277,12 +295,12 @@ export function FlaggedTransactionTable({
                       "disabled:cursor-not-allowed disabled:opacity-50"
                     )}
                   >
-                    {txPending ? "⏳" : "🚫 Bloquear Cuenta"}
+                    {txPending ? "⏳" : "🚫 Bloquear"}
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => void handleUpdateStatus(tx, "Aprobada")}
+                    onClick={() => void handleUpdateStatus(tx, "Aprobado")}
                     disabled={txPending}
                     className={clsx(
                       "rounded px-3 py-1 text-xs font-medium transition-colors",
@@ -291,19 +309,6 @@ export function FlaggedTransactionTable({
                     )}
                   >
                     {txPending ? "⏳" : "✓ Aprobar"}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void handleUpdateStatus(tx, "Rechazada")}
-                    disabled={txPending}
-                    className={clsx(
-                      "rounded px-3 py-1 text-xs font-medium transition-colors",
-                      "bg-orange-600 text-white hover:bg-orange-700",
-                      "disabled:cursor-not-allowed disabled:opacity-50"
-                    )}
-                  >
-                    {txPending ? "⏳" : "⛔ Rechazar"}
                   </button>
                 </div>
               </div>
