@@ -24,6 +24,7 @@ from fastapi.security import HTTPBearer
 from fastapi.openapi.models import OAuthFlows as OAuthFlowsModel
 from fastapi.openapi.utils import get_openapi
 from app.redis_client import redis_db
+from fastapi.middleware.cors import CORSMiddleware
 
 # Ruta de la api
 base_api_url = f"{settings.BACKEND_URL.rstrip('/')}/api/v1"
@@ -75,6 +76,19 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="FinTech Guard - Simulator API", lifespan=lifespan)
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+
+origins = [
+    "http://localhost:5173",    # El puerto por defecto de tu Vite local
+    "http://127.0.0.1:5173",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,            # Permite peticiones desde tu React
+    allow_credentials=True,
+    allow_methods=["*"],              # Permite POST, GET, OPTIONS, DELETE, etc.
+    allow_headers=["*"],              # Permite todos los headers (Content-Type, Authorization, etc.)
+)
 
 def custom_openapi():
     if app.openapi_schema:
