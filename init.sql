@@ -71,4 +71,10 @@ CREATE TABLE IF NOT EXISTS auth_user (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+INSERT INTO auth_user (username, password_hash, role)
+VALUES
+    ('admin', '$pbkdf2-sha256$29000$pdT6nzOG8N67FyLEmLMWQg$OXNrgEG/LCfoT58Kqz5kP7Xw/5AIpF0n0E8qRhGWT78', 'admin'),
+    ('user', '$pbkdf2-sha256$29000$zbk3ptR6D2Hs/f/f23svxQ$K5JzlkTxY3OmmgdsE58ylF3ldIRvb9XE7jRnYhqm1vs', 'user')
+ON CONFLICT (username) DO NOTHING;
+
 CREATE INDEX IF NOT EXISTS idx_auth_user_username ON auth_user(username);

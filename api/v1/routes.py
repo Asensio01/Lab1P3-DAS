@@ -36,7 +36,10 @@ from api.schemas import (
 )
 from core.config import settings
 from infrastructure.models import AccountState, AuthUser
-from repositories.postgres import SqlAlchemyAccountRepository
+from repositories.postgres import (
+    SqlAlchemyAccountRepository,
+    SqlAlchemyTransactionRepository,
+)
 from services.auth import (
     AuthError,
     create_access_token,
@@ -435,6 +438,31 @@ async def get_account(
             status_code=status.HTTP_404_NOT_FOUND, detail="not found"
         )
     return AccountResponse.model_validate(account)
+
+
+@router.get(
+    "/transactions/{tx_id}",
+    response_model=TransactionResponse,
+    tags=["transactions"],
+    summary="Get transaction by id",
+    description="Returns transaction details for admin review.",
+    responses={
+        200: {"description": "Transaction found"},
+        404: {"description": "Transaction not found"},
+    },
+)
+async def get_transaction(
+    tx_id: int,
+    context: TransactionServiceContext = Depends(get_transaction_service),
+    _: AuthContext = Depends(require_role("admin")),
+) -> TransactionResponse:
+    repo = SqlAlchemyTransactionRepository(context.session)
+    transaction = await repo.get_by_id(tx_id)
+    if transaction is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="not found"
+        )
+    return TransactionResponse.model_validate(transaction)
 
 
 @router.post(
