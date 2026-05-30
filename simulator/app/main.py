@@ -20,6 +20,7 @@ from app.scenarios import ejecutar_ataque_race_condition, ejecutar_rafaga_fraude
 from app.types import StressSimulationRequest
 from app.scenarios import ejecutar_rafaga_estres
 from prometheus_fastapi_instrumentator import Instrumentator
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 from fastapi.openapi.models import OAuthFlows as OAuthFlowsModel
 from fastapi.openapi.utils import get_openapi
@@ -73,6 +74,13 @@ async def lifespan(app: FastAPI):
     logger.info("Simulador apagado correctamente.")
 
 app = FastAPI(title="FinTech Guard - Simulator API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 

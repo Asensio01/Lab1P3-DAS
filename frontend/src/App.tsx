@@ -7,9 +7,11 @@ import {
   type FlaggedTransaction,
   type UiStatus
 } from "@/components/FlaggedTransactionTable";
+import { Pagination } from "@/components/Pagination";
 import { Card } from "@/components/ui/card";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { apiClient, type FlaggedResponse, type TransactionResponse } from "@/lib/api";
+import { SimulatorDashboard } from "@/simulator/SimulatorDashboard";
 
 type Role = "admin" | "user";
 
@@ -62,6 +64,8 @@ const STATUS_MAP: Record<string, UiStatus> = {
 
 type DynamicWsEvent = Record<string, unknown>;
 const QUICK_AMOUNTS = [25, 50, 100, 250];
+const ADMIN_PAGE_SIZE = 6;
+const USER_PAGE_SIZE = 6;
 
 function readNumber(...values: unknown[]): number | null {
   for (const value of values) {
@@ -228,6 +232,8 @@ export default function App() {
   const [token, setToken] = useState<string>(
     () => apiClient.getStoredToken() ?? ""
   );
+  const [adminView, setAdminView] = useState<"soc" | "simulator">("soc");
+  const [adminPage, setAdminPage] = useState<number>(1);
   const [authRole, setAuthRole] = useState<Role | null>(null);
   const [authUser, setAuthUser] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -240,7 +246,8 @@ export default function App() {
   const [initialBalance, setInitialBalance] = useState<string>("");
   const [txAmount, setTxAmount] = useState<string>("");
   const [txCountry, setTxCountry] = useState<string>("SV");
-  const [txLimit, setTxLimit] = useState<number>(10);
+  const [txPage, setTxPage] = useState<number>(1);
+  const [txLimit, setTxLimit] = useState<number>(USER_PAGE_SIZE);
   const [alerts, setAlerts] = useState<
     Array<{ id: string; title: string; message: string; type: "success" | "error" | "warning" | "info" }>
   >([]);
@@ -262,6 +269,22 @@ export default function App() {
   );
 
   const kpis = useMemo(() => deriveKpis(transactions), [transactions]);
+
+  const adminTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(transactions.length / ADMIN_PAGE_SIZE)),
+    [transactions.length]
+  );
+
+  const adminPageSafe = Math.min(adminPage, adminTotalPages);
+
+  const pagedAdminTransactions = useMemo(
+    () =>
+      transactions.slice(
+        (adminPageSafe - 1) * ADMIN_PAGE_SIZE,
+        adminPageSafe * ADMIN_PAGE_SIZE
+      ),
+    [adminPageSafe, transactions]
+  );
 
   const {
     data: pendingFlagged,
@@ -312,6 +335,22 @@ export default function App() {
     queryFn: () => apiClient.listMyTransactions(txLimit),
     enabled: Boolean(token) && isUser
   });
+
+  const userTotalPages = useMemo(() => {
+    const count = myTransactions?.length ?? 0;
+    return Math.max(1, Math.ceil(count / USER_PAGE_SIZE));
+  }, [myTransactions]);
+
+  const userPageSafe = Math.min(txPage, userTotalPages);
+
+  const pagedUserTransactions = useMemo(
+    () =>
+      (myTransactions ?? []).slice(
+        (userPageSafe - 1) * USER_PAGE_SIZE,
+        userPageSafe * USER_PAGE_SIZE
+      ),
+    [myTransactions, userPageSafe]
+  );
 
   const pushAlert = useCallback(
     (title: string, message: string, type: "success" | "error" | "warning" | "info"): void => {
@@ -371,7 +410,10 @@ export default function App() {
     if (!token) {
       setAuthRole(null);
       setAuthUser(null);
-      setTxLimit(10);
+      setTxPage(1);
+      setTxLimit(USER_PAGE_SIZE);
+      setAdminView("soc");
+      setAdminPage(1);
       return;
     }
     const decoded = decodeJwt(token);
@@ -380,9 +422,27 @@ export default function App() {
   }, [token]);
 
   useEffect(() => {
+    if (!isAdmin) {
+      setAdminView("soc");
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
     if (!isUser) return;
-    setTxLimit(10);
+    setTxPage(1);
   }, [isUser]);
+
+  useEffect(() => {
+    setTxLimit(USER_PAGE_SIZE * txPage);
+  }, [txPage]);
+
+  useEffect(() => {
+    setAdminPage((prev) => Math.min(prev, adminTotalPages));
+  }, [adminTotalPages]);
+
+  useEffect(() => {
+    setTxPage((prev) => Math.min(prev, userTotalPages));
+  }, [userTotalPages]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -734,117 +794,158 @@ export default function App() {
             >
               Cerrar sesión
             </button>
+            {isAdmin && (
+              <div className="ml-auto flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAdminView("soc")}
+                  className={`rounded border px-3 py-1 text-xs transition ${
+                    adminView === "soc"
+                      ? "border-cyan-400/60 bg-cyan-500/10 text-cyan-200"
+                      : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                  }`}
+                >
+                  SOC Console
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAdminView("simulator")}
+                  className={`rounded border px-3 py-1 text-xs transition ${
+                    adminView === "simulator"
+                      ? "border-emerald-400/60 bg-emerald-500/10 text-emerald-200"
+                      : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                  }`}
+                >
+                  Simulador
+                </button>
+              </div>
+            )}
           </div>
         </header>
         {isAdmin ? (
-          <>
-            <section className="grid gap-4 md:grid-cols-3">
-              <Card className="border-cyan-500/20 bg-[#0d1627] p-5">
-                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                  Transacciones Totales
-                </p>
-                <p className="mt-3 text-3xl font-semibold text-cyan-300">
-                  {kpis.totalTransactions}
-                </p>
-              </Card>
-              <Card className="border-amber-500/20 bg-[#0d1627] p-5">
-                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                  En Revisión Manual
-                </p>
-                <p className="mt-3 text-3xl font-semibold text-amber-300">
-                  {kpis.manualReview}
-                </p>
-              </Card>
-              <Card className="border-rose-500/20 bg-[#0d1627] p-5">
-                <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                  Operaciones Bloqueadas
-                </p>
-                <p className="mt-3 text-3xl font-semibold text-rose-300">
-                  {kpis.blockedOperations}
-                </p>
-              </Card>
-            </section>
+          adminView === "simulator" ? (
+            <SimulatorDashboard token={token || null} />
+          ) : (
+            <>
+              <section className="grid gap-4 md:grid-cols-3">
+                <Card className="border-cyan-500/20 bg-[#0d1627] p-5">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                    Transacciones Totales
+                  </p>
+                  <p className="mt-3 text-3xl font-semibold text-cyan-300">
+                    {kpis.totalTransactions}
+                  </p>
+                </Card>
+                <Card className="border-amber-500/20 bg-[#0d1627] p-5">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                    En Revisión Manual
+                  </p>
+                  <p className="mt-3 text-3xl font-semibold text-amber-300">
+                    {kpis.manualReview}
+                  </p>
+                </Card>
+                <Card className="border-rose-500/20 bg-[#0d1627] p-5">
+                  <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                    Operaciones Bloqueadas
+                  </p>
+                  <p className="mt-3 text-3xl font-semibold text-rose-300">
+                    {kpis.blockedOperations}
+                  </p>
+                </Card>
+              </section>
 
-            <section className="grid gap-5 lg:grid-cols-[3fr_1.25fr]">
-              <Card className="border-slate-700/40 bg-[#0b1220] p-5">
-                <div className="mb-4 flex items-end justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold">Transacciones Flagged</h2>
-                    <p className="text-xs text-slate-400">
-                      Cola forense en vivo. Nuevas alertas entran al inicio.
-                    </p>
+              <section className="grid gap-5 lg:grid-cols-[3fr_1.25fr]">
+                <Card className="border-slate-700/40 bg-[#0b1220] p-5">
+                  <div className="mb-4 flex items-end justify-between">
+                    <div>
+                      <h2 className="text-lg font-semibold">Transacciones Flagged</h2>
+                      <p className="text-xs text-slate-400">
+                        Cola forense en vivo. Nuevas alertas entran al inicio.
+                      </p>
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {isLoadingFlagged
+                        ? "Sincronizando..."
+                        : `${transactions.length} registros`}
+                    </div>
                   </div>
-                  <div className="text-xs text-slate-400">
-                    {isLoadingFlagged
-                      ? "Sincronizando..."
-                      : `${transactions.length} registros`}
+
+                  <FlaggedTransactionTable
+                    transactions={pagedAdminTransactions.map((tx) => ({
+                      id: String(tx.flaggedId),
+                      flaggedId: tx.flaggedId,
+                      transactionId: tx.transactionId,
+                      amount: tx.amount,
+                      country: tx.country,
+                      anomaly: tx.anomaly,
+                      status: tx.status,
+                      timestamp: tx.timestamp,
+                      ip: tx.ip,
+                      account: tx.account,
+                      accountId: tx.accountId ?? undefined
+                    }))}
+                    isLoading={isLoadingFlagged}
+                    onSelect={(tx) => setSelectedTx(tx)}
+                    onTransactionAction={handleTransactionAction}
+                  />
+
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+                    <span>
+                      Pagina {adminPageSafe} de {adminTotalPages}
+                    </span>
+                    <Pagination
+                      page={adminPageSafe}
+                      totalPages={adminTotalPages}
+                      onPageChange={setAdminPage}
+                    />
                   </div>
+                </Card>
+
+                <div className="flex flex-col gap-5">
+                  <Card className="border-slate-700/40 bg-[#0b1220] p-5">
+                    <h2 className="text-base font-semibold">Inspector de Riesgo</h2>
+                    {!selectedTx ? (
+                      <div className="mt-4 rounded-lg border border-dashed border-slate-700 p-6 text-center text-xs text-slate-400">
+                        Selecciona una transacción para inspección forense.
+                      </div>
+                    ) : (
+                      <div className="mt-4 space-y-4 text-xs font-mono">
+                        <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+                          <div className="flex justify-between"><span className="text-slate-400">Flagged ID</span><span>{selectedTx.flaggedId}</span></div>
+                          <div className="flex justify-between"><span className="text-slate-400">Tx ID</span><span>{selectedTx.transactionId}</span></div>
+                          <div className="flex justify-between"><span className="text-slate-400">Monto</span><span className="text-emerald-300">${selectedTx.amount.toFixed(2)}</span></div>
+                          <div className="flex justify-between"><span className="text-slate-400">País</span><span>{selectedTx.country || "-"}</span></div>
+                          <div className="flex justify-between"><span className="text-slate-400">IP</span><span>{selectedTx.ip || "-"}</span></div>
+                          <div className="flex justify-between"><span className="text-slate-400">Cuenta</span><span>{selectedTx.account}</span></div>
+                          <div className="flex justify-between"><span className="text-slate-400">Timestamp</span><span>{new Date(selectedTx.timestamp).toLocaleString()}</span></div>
+                        </div>
+
+                        <div className="rounded border border-rose-500/30 bg-rose-500/10 p-3 text-rose-200">
+                          <span className="block text-[10px] uppercase tracking-wider text-rose-300/80">
+                            Veredicto del Motor
+                          </span>
+                          <span>{selectedTx.anomaly}</span>
+                        </div>
+                      </div>
+                    )}
+                  </Card>
+
+                  <Card className="border-slate-700/40 bg-[#0b1220] p-5">
+                    <h2 className="mb-3 text-base font-semibold">Logs de Seguridad</h2>
+                    <div className="max-h-72 space-y-2 overflow-y-auto rounded border border-slate-700 bg-black/30 p-3 text-[11px] font-mono">
+                      {logs.map((entry) => (
+                        <div key={entry.id} className={`flex gap-2 ${levelClass(entry.level)}`}>
+                          <span className="text-slate-500">[{entry.time}]</span>
+                          <span className="text-slate-300">[{entry.level}]</span>
+                          <span>{entry.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
                 </div>
-
-                <FlaggedTransactionTable
-                  transactions={transactions.map((tx) => ({
-                    id: String(tx.flaggedId),
-                    flaggedId: tx.flaggedId,
-                    transactionId: tx.transactionId,
-                    amount: tx.amount,
-                    country: tx.country,
-                    anomaly: tx.anomaly,
-                    status: tx.status,
-                    timestamp: tx.timestamp,
-                    ip: tx.ip,
-                    account: tx.account,
-                    accountId: tx.accountId ?? undefined
-                  }))}
-                  isLoading={isLoadingFlagged}
-                  onSelect={(tx) => setSelectedTx(tx)}
-                  onTransactionAction={handleTransactionAction}
-                />
-              </Card>
-
-              <div className="flex flex-col gap-5">
-                <Card className="border-slate-700/40 bg-[#0b1220] p-5">
-                  <h2 className="text-base font-semibold">Inspector de Riesgo</h2>
-                  {!selectedTx ? (
-                    <div className="mt-4 rounded-lg border border-dashed border-slate-700 p-6 text-center text-xs text-slate-400">
-                      Selecciona una transacción para inspección forense.
-                    </div>
-                  ) : (
-                    <div className="mt-4 space-y-4 text-xs font-mono">
-                      <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
-                        <div className="flex justify-between"><span className="text-slate-400">Flagged ID</span><span>{selectedTx.flaggedId}</span></div>
-                        <div className="flex justify-between"><span className="text-slate-400">Tx ID</span><span>{selectedTx.transactionId}</span></div>
-                        <div className="flex justify-between"><span className="text-slate-400">Monto</span><span className="text-emerald-300">${selectedTx.amount.toFixed(2)}</span></div>
-                        <div className="flex justify-between"><span className="text-slate-400">País</span><span>{selectedTx.country || "-"}</span></div>
-                        <div className="flex justify-between"><span className="text-slate-400">IP</span><span>{selectedTx.ip || "-"}</span></div>
-                        <div className="flex justify-between"><span className="text-slate-400">Cuenta</span><span>{selectedTx.account}</span></div>
-                        <div className="flex justify-between"><span className="text-slate-400">Timestamp</span><span>{new Date(selectedTx.timestamp).toLocaleString()}</span></div>
-                      </div>
-
-                      <div className="rounded border border-rose-500/30 bg-rose-500/10 p-3 text-rose-200">
-                        <span className="block text-[10px] uppercase tracking-wider text-rose-300/80">
-                          Veredicto del Motor
-                        </span>
-                        <span>{selectedTx.anomaly}</span>
-                      </div>
-                    </div>
-                  )}
-                </Card>
-
-                <Card className="border-slate-700/40 bg-[#0b1220] p-5">
-                  <h2 className="mb-3 text-base font-semibold">Logs de Seguridad</h2>
-                  <div className="max-h-72 space-y-2 overflow-y-auto rounded border border-slate-700 bg-black/30 p-3 text-[11px] font-mono">
-                    {logs.map((entry) => (
-                      <div key={entry.id} className={`flex gap-2 ${levelClass(entry.level)}`}>
-                        <span className="text-slate-500">[{entry.time}]</span>
-                        <span className="text-slate-300">[{entry.level}]</span>
-                        <span>{entry.message}</span>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-              </div>
-            </section>
-          </>
+              </section>
+            </>
+          )
         ) : (
           <section className="grid gap-6 lg:grid-cols-[1.25fr_2fr]">
             <div className="flex flex-col gap-5">
@@ -1063,28 +1164,12 @@ export default function App() {
 
               <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-slate-400">
                 <span className="status-pill rounded-full px-3 py-1">
-                  Limite actual: {txLimit}
+                  Pagina {userPageSafe} de {userTotalPages}
                 </span>
                 {isFetchingTransactions && !isLoadingTransactions && (
                   <span className="status-pill rounded-full px-3 py-1 text-emerald-300">
                     Sincronizando...
                   </span>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setTxLimit((prev) => prev + 10)}
-                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-white/70 transition hover:bg-white/10"
-                >
-                  Cargar 10 mas
-                </button>
-                {txLimit > 10 && (
-                  <button
-                    type="button"
-                    onClick={() => setTxLimit(10)}
-                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-white/70 transition hover:bg-white/10"
-                  >
-                    Volver a 10
-                  </button>
                 )}
               </div>
 
@@ -1096,7 +1181,7 @@ export default function App() {
                     Sin movimientos aun.
                   </div>
                 ) : (
-                  (myTransactions ?? []).map((tx) => {
+                  pagedUserTransactions.map((tx) => {
                     const uiStatus = normalizeStatus(tx.state);
                     return (
                       <div key={tx.id} className="tx-row rounded-xl p-4">
@@ -1124,6 +1209,17 @@ export default function App() {
                     );
                   })
                 )}
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+                <span>
+                  Pagina {userPageSafe} de {userTotalPages}
+                </span>
+                <Pagination
+                  page={userPageSafe}
+                  totalPages={userTotalPages}
+                  onPageChange={setTxPage}
+                />
               </div>
             </Card>
           </section>
