@@ -17,6 +17,7 @@ class AccountResponse(BaseModel):
     user_info: dict
     state: AccountState | None
     balance: Decimal | None
+    reserved_balance: Decimal | None
     version: int | None
 
 
@@ -40,6 +41,11 @@ class AccountCreate(BaseModel):
     )
 
 
+class AccountSelfCreate(BaseModel):
+    user_info: dict
+    initial_balance: Decimal | None = Field(default=None, ge=0)
+
+
 class TransactionCreate(BaseModel):
     account_id: int = Field(..., ge=1)
     ip: IPvAnyAddress
@@ -60,12 +66,17 @@ class TransactionCreate(BaseModel):
     )
 
 
+class TransactionSelfCreate(BaseModel):
+    amount: Decimal = Field(..., gt=0)
+    country: str = Field(..., min_length=2, max_length=64)
+
+
 class TransactionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     account_id: int | None
-    ip: str
+    ip: IPvAnyAddress
     amount: Decimal
     country: str
     state: TransactionState

@@ -4,19 +4,19 @@
   "metadata": {
     "name": "adqhj88",
     "namespace": "default",
-    "uid": "f2b53fb0-3b1a-4aed-967f-b67f6c26caf8",
-    "resourceVersion": "1780076746539008",
-    "generation": 11,
-    "creationTimestamp": "2026-05-29T05:47:51Z",
+    "uid": "7e86482e-de1d-41ac-8881-01ef6250be8d",
+    "resourceVersion": "1780092390002980",
+    "generation": 2,
+    "creationTimestamp": "2026-05-29T22:00:07Z",
     "labels": {
-      "grafana.app/deprecatedInternalID": "2091632645566464"
+      "grafana.app/deprecatedInternalID": "2336307272351744"
     },
     "annotations": {
-      "grafana.app/createdBy": "user:ffnhmb63g7u2od",
+      "grafana.app/createdBy": "user:dfnk9iphr5vy8f",
       "grafana.app/folder": "",
       "grafana.app/saved-from-ui": "Grafana v13.0.1+security-01 (9bbe672d)",
-      "grafana.app/updatedBy": "user:ffnhmb63g7u2od",
-      "grafana.app/updatedTimestamp": "2026-05-29T17:45:46Z"
+      "grafana.app/updatedBy": "user:dfnk9iphr5vy8f",
+      "grafana.app/updatedTimestamp": "2026-05-29T22:06:29Z"
     }
   },
   "spec": {
@@ -63,7 +63,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -182,7 +182,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -274,7 +274,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -393,7 +393,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -489,7 +489,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -581,7 +581,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -699,7 +699,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -788,7 +788,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -907,7 +907,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -1003,7 +1003,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -1087,7 +1087,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -1172,7 +1172,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -1257,7 +1257,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -1376,7 +1376,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -1472,7 +1472,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -1568,7 +1568,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -1664,7 +1664,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -1750,7 +1750,7 @@
                       "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "bfnhqixwcyiv4b"
+                        "name": "${Source}"
                       },
                       "spec": {
                         "editorMode": "code",
@@ -2124,7 +2124,27 @@
       "fiscalYearStartMonth": 0
     },
     "title": "FintechGuard",
-    "variables": [],
+    "variables": [
+      {
+        "kind": "DatasourceVariable",
+        "spec": {
+          "name": "Source",
+          "pluginId": "prometheus",
+          "refresh": "onDashboardLoad",
+          "regex": "",
+          "current": {
+            "text": "prometheus",
+            "value": "cfnkblngsyp6oc"
+          },
+          "options": [],
+          "multi": false,
+          "includeAll": false,
+          "hide": "dontHide",
+          "skipUrlSync": false,
+          "allowCustomValue": true
+        }
+      }
+    ],
     "preferences": {
       "layout": {
         "kind": "GridLayout",

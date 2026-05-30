@@ -12,6 +12,43 @@ export interface APIError {
   detail?: string;
 }
 
+export interface AuthResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+}
+
+export interface AccountResponse {
+  id: number;
+  uuid: string;
+  user_name: string;
+  user_info: Record<string, unknown>;
+  state: string | null;
+  balance: string | number | null;
+  reserved_balance: string | number | null;
+  version: number | null;
+}
+
+export interface TransactionResponse {
+  id: number;
+  account_id: number | null;
+  ip: string;
+  amount: string | number;
+  country: string;
+  state: string;
+  timestamp: string | null;
+}
+
+export interface FlaggedResponse {
+  id: number;
+  transaction_id: number | null;
+  anomaly: string;
+  state: string | null;
+  auditor_notes: string | null;
+  resolved_at: string | null;
+  timestamp: string | null;
+}
+
 export interface MitigationResponse {
   success: boolean;
   message: string;
@@ -19,6 +56,7 @@ export interface MitigationResponse {
 }
 
 export type TxStatusPayload = "Aprobada" | "Rechazada" | "Bloqueada";
+export type AuditDecision = "Aprobado" | "Bloqueado";
 
 class APIClient {
   private baseURL: string;
@@ -38,6 +76,10 @@ class APIClient {
     } else {
       localStorage.removeItem(AUTH_STORAGE_KEY);
     }
+  }
+
+  getStoredToken(): string | null {
+    return localStorage.getItem(AUTH_STORAGE_KEY);
   }
 
   private resolveToken(): string | null {
@@ -74,11 +116,13 @@ class APIClient {
       } catch {
         errorPayload = null;
       }
-      throw new Error(
+      const error = new Error(
         errorPayload?.error ||
           errorPayload?.detail ||
           `HTTP ${response.status}`
       );
+      (error as Error & { status?: number }).status = response.status;
+      throw error;
     }
 
     if (response.status === 204) {
@@ -88,94 +132,83 @@ class APIClient {
     return (await response.json()) as T;
   }
 
-  // Security Mitigation Endpoints
+  // Auth endpoints
 
-  async banIP(
-    ipAddress: string,
-    reason: string,
-    durationHours: number = 24
-  ): Promise<MitigationResponse> {
-    return this.request("/api/v1/security/ban-ip", {
+  async login(username: string, password: string): Promise<AuthResponse> {
+    return this.request<AuthResponse>("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+      requiresAuth: false,
+    });
+  }
+
+  async register(username: string, password: string): Promise<AuthResponse> {
+    return this.request<AuthResponse>("/api/v1/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ username, password, role: "user" }),
+      requiresAuth: false,
+    });
+  }
+
+  // Admin audit endpoints
+
+  async listPendingFlagged(): Promise<FlaggedResponse[]> {
+    return this.request<FlaggedResponse[]>("/api/v1/flagged/pending");
+  }
+
+  async resolveFlagged(
+    flaggedId: number,
+    decision: AuditDecision,
+    auditorNotes?: string
+  ): Promise<FlaggedResponse> {
+    return this.request<FlaggedResponse>(
+      `/api/v1/flagged/${flaggedId}/resolve`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          state: decision,
+          auditor_notes: auditorNotes ?? null,
+        }),
+      }
+    );
+  }
+
+  async getTransaction(transactionId: number): Promise<TransactionResponse> {
+    return this.request<TransactionResponse>(
+      `/api/v1/transactions/${transactionId}`
+    );
+  }
+
+  // User endpoints
+
+  async getMyAccount(): Promise<AccountResponse> {
+    return this.request<AccountResponse>("/api/v1/me/account");
+  }
+
+  async createMyAccount(
+    userInfo: Record<string, unknown>,
+    initialBalance?: number
+  ): Promise<AccountResponse> {
+    return this.request<AccountResponse>("/api/v1/me/account", {
       method: "POST",
       body: JSON.stringify({
-        ip_address: ipAddress,
-        reason,
-        duration_hours: durationHours,
+        user_info: userInfo,
+        initial_balance: initialBalance ?? null,
       }),
     });
   }
 
-  async unbanIP(ipAddress: string): Promise<MitigationResponse> {
-    return this.request(`/api/v1/security/ban-ip/${ipAddress}`, {
-      method: "DELETE",
-    });
+  async listMyTransactions(limit: number = 25): Promise<TransactionResponse[]> {
+    return this.request<TransactionResponse[]>(
+      `/api/v1/me/transactions?limit=${limit}`
+    );
   }
 
-  async blockAccount(
-    accountId: number,
-    reason: string,
-    auditorId?: number
-  ): Promise<MitigationResponse> {
-    return this.request("/api/v1/security/block-account", {
+  async createMyTransaction(amount: number, country: string) {
+    return this.request("/api/v1/me/transactions", {
       method: "POST",
-      body: JSON.stringify({
-        account_id: accountId,
-        reason,
-        auditor_id: auditorId,
-      }),
+      body: JSON.stringify({ amount, country }),
     });
-  }
-
-  async unblockAccount(
-    accountId: number,
-    auditorId?: number
-  ): Promise<MitigationResponse> {
-    return this.request("/api/v1/security/unblock-account", {
-      method: "POST",
-      body: JSON.stringify({
-        account_id: accountId,
-        auditor_id: auditorId,
-      }),
-    });
-  }
-
-  // Transaction Audit Endpoints
-
-  async patchTransactionStatus(
-    txId: number,
-    status: TxStatusPayload
-  ): Promise<MitigationResponse> {
-    return this.request(`/api/v1/transactions/${txId}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        status,
-      }),
-      requiresAuth: true,
-    });
-  }
-
-  async auditTransaction(
-
-    flaggedTransactionId: number,
-    decision: "Aprobado" | "Bloqueado" | "Revision Pendiente",
-    auditorNotes?: string,
-    auditorId?: number
-  ): Promise<MitigationResponse> {
-    return this.request("/api/v1/audit/resolve", {
-      method: "POST",
-      body: JSON.stringify({
-        flagged_transaction_id: flaggedTransactionId,
-        decision,
-        auditor_notes: auditorNotes,
-        auditor_id: auditorId,
-      }),
-    });
-  }
-
-  // List endpoints for retrieving data
-
-  async getAccount(accountId: number) {
-    return this.request(`/api/v1/accounts/${accountId}`);
   }
 }
 
