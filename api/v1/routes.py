@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -19,13 +20,16 @@ from api.schemas import (
     AuditResolveRequest,
     FlaggedResponse,
     LoginRequest,
+    MessageResponse,
     RegisterRequest,
     RegisterResponse,
+    SimulatorAlertRequest,
     TokenResponse,
     TransactionCreate,
     TransactionQueryRequest,
     TransactionResponse,
     TransactionResultResponse,
+    TransactionStatusPatchRequest,
 )
 from core.config import settings
 from infrastructure.models import AuthUser
@@ -36,6 +40,7 @@ from services.auth import (
     verify_access_token,
     verify_password,
 )
+from services.notifications import notification_hub
 
 auth_scheme = HTTPBearer(auto_error=False)
 
@@ -328,3 +333,62 @@ async def query_transactions(
         account_id=payload.account_id,
     )
     return [TransactionResponse.model_validate(item) for item in transactions]
+
+
+@router.post(
+    "/simulator/alert",
+    response_model=MessageResponse,
+    tags=["transactions"],
+    summary="Ingest simulator anomaly alert",
+    description="Receives anomaly alerts from simulator and broadcasts them over WebSocket.",
+    responses={
+        200: {"description": "Alert accepted and broadcasted"},
+        401: {"description": "Unauthorized"},
+    },
+)
+async def simulator_alert(
+    payload: SimulatorAlertRequest,
+    _: str = Depends(require_auth),
+) -> MessageResponse:
+    event = {
+        "type": "simulator_alert",
+        "transaction_id": payload.transaction_id,
+        "anomaly": payload.anomaly,
+        "amount": float(payload.amount) if payload.amount is not None else None,
+        "country": payload.country,
+        "ip": payload.ip,
+        "account": payload.account,
+        "timestamp": (
+            payload.timestamp.astimezone(timezone.utc).isoformat()
+            if payload.timestamp is not None
+            else datetime.now(timezone.utc).isoformat()
+        ),
+    }
+    await notification_hub.broadcast(event)
+    return MessageResponse(message="alert broadcasted")
+
+
+@router.patch(
+    "/transactions/{tx_id}/status",
+    response_model=MessageResponse,
+    tags=["transactions"],
+    summary="Update transaction status in dashboard stream",
+    description="Publishes a transaction status update event over WebSocket.",
+    responses={
+        200: {"description": "Status update broadcasted"},
+        401: {"description": "Unauthorized"},
+    },
+)
+async def patch_transaction_status(
+    tx_id: int,
+    payload: TransactionStatusPatchRequest,
+    _: str = Depends(require_auth),
+) -> MessageResponse:
+    event = {
+        "type": "transaction_status_updated",
+        "tx_id": tx_id,
+        "status": payload.status,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    await notification_hub.broadcast(event)
+    return MessageResponse(message="transaction status broadcasted")
