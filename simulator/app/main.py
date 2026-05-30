@@ -1,10 +1,12 @@
 # simulator/app/main.py
 import asyncio
 from contextlib import asynccontextmanager
+import json
 import logging
 import random
+import uuid
 from app.config import settings
-from fastapi import FastAPI, APIRouter, HTTPException, status, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, status, Depends, Path
 from app.types import ExpiredTokenRequest, FraudSimulationRequest, RaceConditionRequest
 from app.client import (
     obtener_cuentas_candidatas_doble_pago,
@@ -12,15 +14,16 @@ from app.client import (
     garantizar_cuentas_iniciales,
     enviar_transaccion,
     obtener_cuentas_candidatas_estres,
-    verificar_token_expirado,
+    verificar_token_expirado_bg,
 )
-from app.scenarios import ejecutar_ataque_race_condition, ejecutar_rafaga_fraude, generar_transaccion_normal
+from app.scenarios import ejecutar_ataque_race_condition, ejecutar_rafaga_fraude, generar_transaccion_normal, iniciar_simulacion_fraude_global
 from app.types import StressSimulationRequest
 from app.scenarios import ejecutar_rafaga_estres
 from prometheus_fastapi_instrumentator import Instrumentator
 from fastapi.security import HTTPBearer
 from fastapi.openapi.models import OAuthFlows as OAuthFlowsModel
 from fastapi.openapi.utils import get_openapi
+from app.redis_client import redis_db
 
 # Ruta de la api
 base_api_url = f"{settings.BACKEND_URL.rstrip('/')}/api/v1"
@@ -130,15 +133,22 @@ async def activar_simulacion_fraude(payload: FraudSimulationRequest):
     # 2. Seleccionar cuentas aleatorias según la cantidad pedida
     cuentas_seleccionadas = random.sample(candidatas, payload.cantidad_cuentas)
     ids_ataque = [acc["id"] for acc in cuentas_seleccionadas]
+
+    # 3. Generamos un UUID único para rastrear esta simulación
+    simulation_id = str(uuid.uuid4())
+
+    # 4. Registramos el estado inicial en Redis
+    estado_inicial = {"status": "PROCESSING", "message": "Enviando fraude..."}
+    redis_db.setex(f"sim:{simulation_id}", 3600, json.dumps(estado_inicial))
     
-    # 3. Lanzar los ataques en segundo plano de manera concurrente
-    for account_id in ids_ataque:
-        asyncio.create_task(ejecutar_rafaga_fraude(account_id))
+    # 5. Generar una solo tarea asíncrona para ejecutar las ráfagas de fraude en segundo plano
+    asyncio.create_task(iniciar_simulacion_fraude_global(simulation_id, ids_ataque))
         
+    # . Respondemos de INMEDIATO a React con el ID asignado
     return {
-        "message": f"Simulación de lavado iniciada en segundo plano.",
-        "cuentas_afectadas": ids_ataque,
-        "detalles": "Se enviarán 3 transacciones de $9,000 a cada cuenta elegida."
+        "simulation_id": simulation_id,
+        "status": "PROCESSING",
+        "message": "Prueba de fraude iniciada de fondo."
     }
 
 @app.post(
@@ -162,13 +172,22 @@ async def activar_simulacion_estres(payload: StressSimulationRequest):
             detail="No hay cuentas en el sistema para realizar la simulación de estrés."
         )
 
-    # 2. Lanzar la ráfaga masiva en segundo plano
-    asyncio.create_task(ejecutar_rafaga_estres(payload.cantidad_transacciones, cuentas_ids))
+    #2. Generamos un UUID único para rastrear esta simulación
+    simulation_id = str(uuid.uuid4())
+
+    #3. Registramos el estado inicial en Redis
+    estado_inicial = {"status": "PROCESSING", "message": "Enviando ráfagas masivas..."}
+    redis_db.setex(f"sim:{simulation_id}", 3600, json.dumps(estado_inicial))
+
+    # 4. Lanzar la ráfaga masiva en segundo plano
+    asyncio.create_task(ejecutar_rafaga_estres(simulation_id, payload.cantidad_transacciones, cuentas_ids))
     
+    # 5. Respondemos de INMEDIATO a React con el ID asignado
     return {
-        "message": f"Prueba de estrés iniciada en segundo plano con {payload.cantidad_transacciones} peticiones.",
-        "ip_atacante": "192.168.100.50",
-        "cuentas_involucradas": cuentas_ids
+        "simulation_id": simulation_id,
+        "status": "PROCESSING",
+        "message": "Prueba de estrés iniciada de fondo.",
+        "ip_atacante": "192.168.100.50"
     }
 
 @app.post(
@@ -218,15 +237,45 @@ async def activar_simulacion_race_condition(payload: RaceConditionRequest):
 
 @app.post(
     "/api/v1/simulations/expired-token",
-    status_code=status.HTTP_200_OK,
+    status_code=status.HTTP_202_ACCEPTED,
     tags=["Simulación"],
 )
 async def activar_simulacion_token_expirado(payload: ExpiredTokenRequest):
     """
     Solicita un token de login, espera a que expire y prueba acceso al backend.
     """
-    resultado = await verificar_token_expirado(payload.account_id)
-    return {
-        "status": "completed",
-        "resultado": resultado,
+    simulation_id = str(uuid.uuid4())
+    
+    # Guardamos el estado inicial en Redis
+    estado_inicial = {
+        "status": "PROCESSING", 
+        "message": "Token obtenido. Esperando pacientemente 15 minutos a que expire de forma natural..."
     }
+    redis_db.setex(f"sim:{simulation_id}", 7200, json.dumps(estado_inicial))
+    asyncio.create_task(verificar_token_expirado_bg(simulation_id, payload.account_id))
+    
+    return {
+        "simulation_id": simulation_id,
+        "status": "PROCESSING",
+        "message": "Simulación programada de fondo de forma eficiente."
+    }
+
+@app.get(
+    "/api/v1/simulations/status/{simulation_id}",
+    tags=["Simulación"]
+)
+async def obtener_estatus_simulacion(simulation_id: str = Path(..., description="ID de la simulación")):
+    """
+    Endpoint de consulta recurrente para el Frontend.
+    Lee directamente de Redis el progreso o resultado de la prueba.
+    """
+    data = redis_db.get(f"sim:{simulation_id}")
+    
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="La simulación solicitada no existe o ya expiró de la caché."
+        )
+        
+    # Convertimos el string de Redis de vuelta a un objeto JSON (dict) de Python
+    return json.loads(data)

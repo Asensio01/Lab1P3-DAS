@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS account (
     state account_state DEFAULT 'Activo',
     -- Campos cruciales para transacciones y concurrencia (Race Conditions)
     balance DECIMAL(12,2) DEFAULT 0.00 CHECK (balance >= 0),
+    reserved_balance DECIMAL(12,2) DEFAULT 0.00 CHECK (reserved_balance >= 0),
     version INTEGER DEFAULT 1
 );
 
@@ -66,8 +67,14 @@ CREATE TABLE IF NOT EXISTS auth_user (
     id BIGSERIAL PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'admin',
+    role TEXT NOT NULL DEFAULT 'user', -- 'admin' o 'user'
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+INSERT INTO auth_user (username, password_hash, role)
+VALUES
+    ('admin', '$pbkdf2-sha256$29000$pdT6nzOG8N67FyLEmLMWQg$OXNrgEG/LCfoT58Kqz5kP7Xw/5AIpF0n0E8qRhGWT78', 'admin'),
+    ('user', '$pbkdf2-sha256$29000$zbk3ptR6D2Hs/f/f23svxQ$K5JzlkTxY3OmmgdsE58ylF3ldIRvb9XE7jRnYhqm1vs', 'user')
+ON CONFLICT (username) DO NOTHING;
 
 CREATE INDEX IF NOT EXISTS idx_auth_user_username ON auth_user(username);

@@ -2,6 +2,8 @@
 import random
 import asyncio
 import logging
+from app.redis_client import redis_db
+import json
 from decimal import Decimal
 from app.types import TransactionCreate
 from app.client import enviar_transaccion, enviar_transaccion_con_feedback
@@ -31,10 +33,11 @@ def generar_transaccion_normal(account_id: int) -> TransactionCreate:
     )
 
 # Escenario de fraude: Ráfaga de transacciones sospechosas
-async def ejecutar_rafaga_fraude(account_id: int):
+async def ejecutar_rafaga_fraude(account_id: int) -> list[dict]:
     """Dispara 4 transacciones de $9,000 en ráfaga para una cuenta."""
     logger.warning(f"🚨 INICIANDO PATRÓN DE FRAUDE EN CUENTA ID: {account_id} 🚨")
-    
+    resultados_cuenta = []
+
     for i in range(1, 5): # Enviaremos 4 transacciones de $9,000
         tx = TransactionCreate(
             account_id=account_id,
@@ -46,13 +49,58 @@ async def ejecutar_rafaga_fraude(account_id: int):
         logger.info(f"⚡ [Ráfaga {i}/4] Enviando $9,000 para cuenta {account_id}...")
         # Las enviamos de forma asíncrona pero con un ligero desfase (1.5s) 
         # para que entren holgadamente en el umbral de los 10 segundos
-        await enviar_transaccion(tx)
+        # y guardamos el reporte de la transaccion
+        resultado = await enviar_transaccion(tx)
+        resultados_cuenta.append(resultado)
         await asyncio.sleep(1.5) 
         
     logger.warning(f"🛑 Fin de ráfaga de fraude para cuenta ID: {account_id}. Debería estar marcada/bloqueada.")
+    return resultados_cuenta
+
+async def iniciar_simulacion_fraude_global(simulation_id: str, ids_ataque: list[int]):
+    """
+    Orquesta la simulación de fraude ejecutando las ráfagas en paralelo 
+    para todas las cuentas y consolida el reporte unificado en Redis.
+    """
+    logger.warning(f"🕵️‍♂️ Orquestador de Fraude activado para la simulación: {simulation_id}")
+    
+    # Creamos las corrutinas para mapear todas las cuentas de manera concurrente
+    tareas = [ejecutar_rafaga_fraude(account_id) for account_id in ids_ataque]
+    
+    # Ejecutamos todas las ráfagas de las cuentas en paralelo y esperamos los resultados
+    # 'resultados_totales' será una lista de listas: [[tx1, tx2...], [tx1, tx2...]]
+    resultados_totales = await asyncio.gather(*tareas)
+    
+    # Aplanamos la lista de listas en un solo array de transacciones para el frontend
+    cronograma_unificado = []
+    for rafaga_cuenta in resultados_totales:
+        cronograma_unificado.extend(rafaga_cuenta)
+        
+    # Calculamos métricas globales de todo el ataque
+    exitosas = sum(1 for r in cronograma_unificado if r["status"] == "SUCCESS")
+    bloqueadas = sum(1 for r in cronograma_unificado if r["status"] == "BLOCKED")
+    fallidas = len(cronograma_unificado) - exitosas - bloqueadas
+
+    # Estructuramos el JSON final
+    reporte_final = {
+        "status": "COMPLETED",
+        "tipo_simulacion": "FRAUDE",
+        "cuentas_atacadas": ids_ataque,
+        "total_transacciones_enviadas": len(cronograma_unificado),
+        "resumen": {
+            "exitosas": exitosas,
+            "bloqueadas_403_antifraude": bloqueadas,
+            "fallidas_sistema": fallidas
+        },
+        "cronograma": cronograma_unificado
+    }
+
+    # Guardamos el consolidado en Redis una sola vez
+    redis_db.setex(f"sim:{simulation_id}", 3600, json.dumps(reporte_final))
+    logger.warning(f"🛑 Simulación de Fraude {simulation_id} consolidada en Redis con éxito.")
 
 # Escenario de estrés: Ráfaga masiva desde una sola IP
-async def ejecutar_rafaga_estres(cantidad_tx: int, cuentas_disponibles: list[int]):
+async def ejecutar_rafaga_estres(simulation_id: str, cantidad_tx: int, cuentas_disponibles: list[int]):
     """Dispara ráfagas de transacciones concurrentes desde una sola IP usando múltiples cuentas."""
     logger.warning(f"🔥 INICIANDO PRUEBA DE ESTRÉS: {cantidad_tx} transacciones desde la IP {IP_STRESS_TARGET} 🔥")
     
@@ -74,10 +122,25 @@ async def ejecutar_rafaga_estres(cantidad_tx: int, cuentas_disponibles: list[int
         # Opcional: Un micro-retraso para no asfixiar el socket local del contenedor si son demasiadas
         if i % 20 == 0:
             await asyncio.sleep(0.1)
-
     # Dispara todas las solicitudes en paralelo hacia el Backend de FastAPI
-    await asyncio.gather(*tareas)
+    reportes = await asyncio.gather(*tareas)
+    exitosas = sum(1 for r in reportes if r["status"] == "SUCCESS")
+    bloqueadas = sum(1 for r in reportes if r["status"] == "BLOCKED")
+    fallidas = len(reportes) - exitosas - bloqueadas
     logger.warning(f"🛑 Fin de la ráfaga de estrés. Se enviaron {cantidad_tx} peticiones.")
+
+    reporte_final = {
+        "tipo_simulacion": "ESTRES",
+        "total_enviadas": cantidad_tx,
+        "resumen": {
+            "exitosas": exitosas,
+            "bloqueadas_403": bloqueadas,
+            "fallidas": fallidas
+        },
+        "cronograma": reportes
+    }
+
+    redis_db.setex(f"sim:{simulation_id}", 3600, json.dumps(reporte_final))
 
 async def ejecutar_ataque_race_condition(account_id: int, balance_actual: Decimal) -> dict:
     """

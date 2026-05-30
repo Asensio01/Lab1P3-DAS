@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from decimal import Decimal
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -17,6 +18,7 @@ from api.dependencies import (
 from api.schemas import (
     AccountCreate,
     AccountResponse,
+    AccountSelfCreate,
     AuditResolveRequest,
     FlaggedResponse,
     LoginRequest,
@@ -29,10 +31,15 @@ from api.schemas import (
     TransactionQueryRequest,
     TransactionResponse,
     TransactionResultResponse,
+    TransactionSelfCreate,
     TransactionStatusPatchRequest,
 )
 from core.config import settings
-from infrastructure.models import AuthUser
+from infrastructure.models import AccountState, AuditState, AuthUser
+from repositories.postgres import (
+    SqlAlchemyAccountRepository,
+    SqlAlchemyTransactionRepository,
+)
 from services.auth import (
     AuthError,
     create_access_token,
@@ -45,19 +52,38 @@ from services.notifications import notification_hub
 auth_scheme = HTTPBearer(auto_error=False)
 
 
+@dataclass(frozen=True)
+class AuthContext:
+    username: str
+    role: str
+
+
 async def require_auth(
     credentials: HTTPAuthorizationCredentials | None = Depends(auth_scheme),
-) -> str:
+) -> AuthContext:
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="missing token"
         )
     try:
-        return verify_access_token(credentials.credentials)
+        username, role = verify_access_token(credentials.credentials)
+        return AuthContext(username=username, role=role)
     except AuthError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
         ) from exc
+
+
+def require_role(*roles: str):
+    async def _require(auth: AuthContext = Depends(require_auth)) -> AuthContext:
+        if auth.role not in roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="insufficient role",
+            )
+        return auth
+
+    return _require
 
 
 router = APIRouter(prefix="/api/v1")
@@ -104,7 +130,8 @@ async def login(
             detail="invalid credentials",
         )
 
-    token, expires_in = create_access_token(payload.username)
+    role = user.role if valid_user else "admin"
+    token, expires_in = create_access_token(payload.username, role)
     return TokenResponse(access_token=token, expires_in=expires_in)
 
 
@@ -135,11 +162,11 @@ async def register(
         user = AuthUser(
             username=payload.username,
             password_hash=hash_password(payload.password),
-            role=payload.role,
+            role="user",
         )
         await auth_context.repo.create(user)
 
-    token, expires_in = create_access_token(payload.username)
+    token, expires_in = create_access_token(payload.username, user.role)
     return RegisterResponse(
         username=user.username,
         role=user.role,
@@ -165,7 +192,7 @@ async def register(
 async def submit_transaction(
     payload: TransactionCreate,
     context: TransactionServiceContext = Depends(get_transaction_service),
-    _: str = Depends(require_auth),
+    _: AuthContext = Depends(require_role("admin")),
 ) -> TransactionResultResponse:
     async with context.session.begin():
         result = await context.service.submit_transaction(
@@ -195,7 +222,7 @@ async def resolve_flagged(
     flagged_id: int,
     payload: AuditResolveRequest,
     context: AuditServiceContext = Depends(get_audit_service),
-    _: str = Depends(require_auth),
+    _: AuthContext = Depends(require_role("admin")),
 ) -> FlaggedResponse:
     async with context.session.begin():
         updated = await context.service.resolve_flagged(
@@ -203,6 +230,20 @@ async def resolve_flagged(
             state=payload.state,
             auditor_notes=payload.auditor_notes,
         )
+    status = "Under Review"
+    if payload.state == AuditState.APROBADO:
+        status = "Aprobada"
+    elif payload.state == AuditState.BLOQUEADO:
+        status = "Rechazada"
+
+    event = {
+        "type": "transaction_status_updated",
+        "tx_id": updated.transaction_id,
+        "flagged_id": updated.id,
+        "status": status,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    await notification_hub.broadcast(event)
     return FlaggedResponse.model_validate(updated)
 
 
@@ -218,7 +259,7 @@ async def resolve_flagged(
 )
 async def list_pending_flagged(
     context: AuditServiceContext = Depends(get_audit_service),
-    _: str = Depends(require_auth),
+    _: AuthContext = Depends(require_role("admin")),
 ) -> list[FlaggedResponse]:
     flagged = await context.service.list_pending()
     return [FlaggedResponse.model_validate(item) for item in flagged]
@@ -239,7 +280,7 @@ async def list_pending_flagged(
 async def create_account(
     payload: AccountCreate,
     context: AccountServiceContext = Depends(get_account_service),
-    _: str = Depends(require_auth),
+    _: AuthContext = Depends(require_role("admin")),
 ) -> AccountResponse:
     async with context.session.begin():
         account = await context.service.create_account(
@@ -247,6 +288,56 @@ async def create_account(
             user_info=payload.user_info,
             initial_balance=payload.initial_balance,
             state=payload.state,
+        )
+    return AccountResponse.model_validate(account)
+
+
+@router.post(
+    "/me/account",
+    response_model=AccountResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["accounts"],
+    summary="Create own account",
+    description="Creates an account bound to the authenticated user.",
+    responses={
+        201: {"description": "Account created"},
+        400: {"description": "Validation error"},
+    },
+)
+async def create_my_account(
+    payload: AccountSelfCreate,
+    context: AccountServiceContext = Depends(get_account_service),
+    auth: AuthContext = Depends(require_role("admin", "user")),
+) -> AccountResponse:
+    async with context.session.begin():
+        account = await context.service.create_account(
+            user_name=auth.username,
+            user_info=payload.user_info,
+            initial_balance=payload.initial_balance,
+            state=AccountState.ACTIVO,
+        )
+    return AccountResponse.model_validate(account)
+
+
+@router.get(
+    "/me/account",
+    response_model=AccountResponse,
+    tags=["accounts"],
+    summary="Get own account",
+    description="Returns the account bound to the authenticated user.",
+    responses={
+        200: {"description": "Account found"},
+        404: {"description": "Account not found"},
+    },
+)
+async def get_my_account(
+    context: AccountServiceContext = Depends(get_account_service),
+    auth: AuthContext = Depends(require_role("admin", "user")),
+) -> AccountResponse:
+    account = await context.service.get_by_user_name(auth.username)
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="not found"
         )
     return AccountResponse.model_validate(account)
 
@@ -264,10 +355,79 @@ async def create_account(
 async def list_active_accounts(
     min_balance: Decimal = Query(..., ge=0),
     context: AccountServiceContext = Depends(get_account_service),
-    _: str = Depends(require_auth),
+    _: AuthContext = Depends(require_role("admin")),
 ) -> list[AccountResponse]:
     accounts = await context.service.get_all_active_accounts(min_balance)
     return [AccountResponse.model_validate(account) for account in accounts]
+
+
+@router.post(
+    "/me/transactions",
+    response_model=TransactionResultResponse,
+    status_code=status.HTTP_201_CREATED,
+    tags=["transactions"],
+    summary="Submit own transaction",
+    description="Creates a transaction for the authenticated user's account.",
+    responses={
+        201: {"description": "Transaction recorded"},
+        400: {"description": "Validation error"},
+        403: {"description": "Blocked by antifraud or account state"},
+        404: {"description": "Account not found"},
+        409: {"description": "Concurrency conflict"},
+    },
+)
+async def submit_my_transaction(
+    payload: TransactionSelfCreate,
+    request: Request,
+    context: TransactionServiceContext = Depends(get_transaction_service),
+    auth: AuthContext = Depends(require_role("admin", "user")),
+) -> TransactionResultResponse:
+    client_ip = request.client.host if request.client else "0.0.0.0"
+    async with context.session.begin():
+        account_repo = SqlAlchemyAccountRepository(context.session)
+        account = await account_repo.get_by_user_name(auth.username)
+        if account is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="account not found",
+            )
+        result = await context.service.submit_transaction(
+            account_id=account.id,
+            ip=client_ip,
+            amount=payload.amount,
+            country=payload.country,
+        )
+    return TransactionResultResponse(
+        transaction=result.transaction, flagged=result.flagged
+    )
+
+
+@router.get(
+    "/me/transactions",
+    response_model=list[TransactionResponse],
+    tags=["transactions"],
+    summary="List own transactions",
+    description="Lists recent transactions for the authenticated user.",
+    responses={
+        200: {"description": "Transactions returned"},
+        404: {"description": "Account not found"},
+    },
+)
+async def list_my_transactions(
+    limit: int = Query(25, ge=1, le=200),
+    context: TransactionServiceContext = Depends(get_transaction_service),
+    auth: AuthContext = Depends(require_role("admin", "user")),
+) -> list[TransactionResponse]:
+    account_repo = SqlAlchemyAccountRepository(context.session)
+    account = await account_repo.get_by_user_name(auth.username)
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="account not found"
+        )
+    transactions = await context.service.list_recent(
+        limit=limit, account_id=account.id
+    )
+    return [TransactionResponse.model_validate(item) for item in transactions]
 
 
 @router.get(
@@ -284,7 +444,7 @@ async def list_active_accounts(
 async def get_account(
     account_id: int,
     repo=Depends(get_account_repo),
-    _: str = Depends(require_auth),
+    _: AuthContext = Depends(require_role("admin")),
 ) -> AccountResponse:
     account = await repo.get_by_id(account_id)
     if account is None:
@@ -292,6 +452,31 @@ async def get_account(
             status_code=status.HTTP_404_NOT_FOUND, detail="not found"
         )
     return AccountResponse.model_validate(account)
+
+
+@router.get(
+    "/transactions/{tx_id}",
+    response_model=TransactionResponse,
+    tags=["transactions"],
+    summary="Get transaction by id",
+    description="Returns transaction details for admin review.",
+    responses={
+        200: {"description": "Transaction found"},
+        404: {"description": "Transaction not found"},
+    },
+)
+async def get_transaction(
+    tx_id: int,
+    context: TransactionServiceContext = Depends(get_transaction_service),
+    _: AuthContext = Depends(require_role("admin")),
+) -> TransactionResponse:
+    repo = SqlAlchemyTransactionRepository(context.session)
+    transaction = await repo.get_by_id(tx_id)
+    if transaction is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="not found"
+        )
+    return TransactionResponse.model_validate(transaction)
 
 
 @router.post(
@@ -310,7 +495,7 @@ async def query_transactions(
     request: Request,
     context: TransactionServiceContext = Depends(get_transaction_service),
     security_context=Depends(get_security_log_service),
-    _: str = Depends(require_auth),
+    _: AuthContext = Depends(require_role("admin")),
 ) -> list[TransactionResponse]:
     if (
         payload.username != settings.db_query_username
@@ -348,7 +533,7 @@ async def query_transactions(
 )
 async def simulator_alert(
     payload: SimulatorAlertRequest,
-    _: str = Depends(require_auth),
+    _: AuthContext = Depends(require_role("admin")),
 ) -> MessageResponse:
     event = {
         "type": "simulator_alert",
@@ -382,7 +567,7 @@ async def simulator_alert(
 async def patch_transaction_status(
     tx_id: int,
     payload: TransactionStatusPatchRequest,
-    _: str = Depends(require_auth),
+    _: AuthContext = Depends(require_role("admin")),
 ) -> MessageResponse:
     event = {
         "type": "transaction_status_updated",

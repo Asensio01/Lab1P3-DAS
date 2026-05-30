@@ -23,6 +23,14 @@ class AccountRepository(Protocol):
         self, account_id: int, expected_version: int, delta: Decimal
     ) -> Account | None: ...
 
+    async def update_balances_with_version(
+        self,
+        account_id: int,
+        expected_version: int,
+        balance_delta: Decimal,
+        reserved_delta: Decimal,
+    ) -> Account | None: ...
+
     async def list_active(self, min_balance: Decimal) -> list[Account]: ...
 
 
@@ -30,6 +38,10 @@ class TransactionRepository(Protocol):
     async def get_by_id(self, transaction_id: int) -> Transaction | None: ...
 
     async def create(self, transaction: Transaction) -> Transaction: ...
+
+    async def update_state(
+        self, transaction_id: int, state: str
+    ) -> Transaction | None: ...
 
     async def list_recent_by_account(
         self, account_id: int, since: datetime
@@ -41,6 +53,8 @@ class TransactionRepository(Protocol):
 
 
 class FlaggedTransactionRepository(Protocol):
+    async def get_by_id(self, flagged_id: int) -> FlaggedTransaction | None: ...
+
     async def get_by_transaction_id(
         self, transaction_id: int
     ) -> FlaggedTransaction | None: ...

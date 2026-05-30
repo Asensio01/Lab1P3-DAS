@@ -75,7 +75,7 @@ Response: { success: true, transaction_id: X, new_state: "Aprobado" }
 
 ```sql
 -- Account: Cuentas bancarias
-id | uuid | user_name | user_info | state | balance | version
+id | uuid | user_name | user_info | state | balance | reserved_balance | version
 
 -- Transaction: Transacciones procesadas
 id | account_id | amount | country | ip | state | timestamp | anomaly_type

@@ -24,11 +24,12 @@ def verify_password(password: str, password_hash: str) -> bool:
     return pwd_context.verify(password, password_hash)
 
 
-def create_access_token(subject: str) -> tuple[str, int]:
+def create_access_token(subject: str, role: str) -> tuple[str, int]:
     now = datetime.now(tz=timezone.utc)
     expires_in = settings.jwt_exp_seconds
     payload = {
         "sub": subject,
+        "role": role,
         "iss": settings.jwt_issuer,
         "aud": settings.jwt_audience,
         "iat": int(now.timestamp()),
@@ -38,7 +39,7 @@ def create_access_token(subject: str) -> tuple[str, int]:
     return token, expires_in
 
 
-def verify_access_token(token: str) -> str:
+def verify_access_token(token: str) -> tuple[str, str]:
     try:
         payload = jwt.decode(
             token,
@@ -55,4 +56,7 @@ def verify_access_token(token: str) -> str:
     subject = payload.get("sub")
     if not subject:
         raise AuthError("token missing subject")
-    return str(subject)
+    role = payload.get("role")
+    if not role:
+        raise AuthError("token missing role")
+    return str(subject), str(role)
