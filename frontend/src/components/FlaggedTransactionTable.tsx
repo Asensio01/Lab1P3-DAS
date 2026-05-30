@@ -22,6 +22,7 @@ export interface FlaggedTransaction {
 export interface FlaggedTransactionTableProps {
   transactions: FlaggedTransaction[];
   isLoading?: boolean;
+  onSelect?: (transaction: FlaggedTransaction | null) => void;
   onTransactionAction?: (
     transaction: FlaggedTransaction,
     payload: {
@@ -52,6 +53,7 @@ function anomalyBadgeColor(anomaly: string): string {
 export function FlaggedTransactionTable({
   transactions,
   isLoading,
+  onSelect,
   onTransactionAction,
 }: FlaggedTransactionTableProps): React.ReactElement {
   const [selectedRow, setSelectedRow] = useState<string | null>(null);
@@ -199,7 +201,13 @@ export function FlaggedTransactionTable({
               "hover:border-white/20",
               selectedRow === tx.id && "border-emerald-500/50 bg-emerald-950/10"
             )}
-            onClick={() => setSelectedRow((prev) => (prev === tx.id ? null : tx.id))}
+            onClick={() => {
+              setSelectedRow((prev) => {
+                const next = prev === tx.id ? null : tx.id;
+                onSelect?.(next ? tx : null);
+                return next;
+              });
+            }}
           >
             <div className="mb-3 flex items-center justify-between gap-4">
               <div className="flex min-w-0 flex-1 items-center gap-3">

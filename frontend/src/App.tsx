@@ -61,6 +61,7 @@ const STATUS_MAP: Record<string, UiStatus> = {
 };
 
 type DynamicWsEvent = Record<string, unknown>;
+const QUICK_AMOUNTS = [25, 50, 100, 250];
 
 function readNumber(...values: unknown[]): number | null {
   for (const value of values) {
@@ -108,6 +109,13 @@ function normalizeStatus(raw: string | null | undefined): UiStatus {
     .toUpperCase()
     .replace(/\s+/g, "_");
   return STATUS_MAP[key] ?? "Under Review";
+}
+
+function statusTone(status: UiStatus): string {
+  if (status === "Aprobada") return "text-emerald-300 border-emerald-500/40";
+  if (status === "Rechazada") return "text-amber-300 border-amber-500/40";
+  if (status === "Bloqueada") return "text-rose-300 border-rose-500/40";
+  return "text-sky-200 border-sky-500/30";
 }
 
 function mapFlaggedToRow(
@@ -232,6 +240,7 @@ export default function App() {
   const [initialBalance, setInitialBalance] = useState<string>("");
   const [txAmount, setTxAmount] = useState<string>("");
   const [txCountry, setTxCountry] = useState<string>("SV");
+  const [txLimit, setTxLimit] = useState<number>(10);
   const [alerts, setAlerts] = useState<
     Array<{ id: string; title: string; message: string; type: "success" | "error" | "warning" | "info" }>
   >([]);
@@ -249,7 +258,7 @@ export default function App() {
 
   const wsUrlDirect = "ws://localhost:8000/ws";
   const { state: wsState, url: wsUrl, lastEvent } = useWebSocket(
-    isAdmin ? token : undefined
+    token || undefined
   );
 
   const kpis = useMemo(() => deriveKpis(transactions), [transactions]);
@@ -277,15 +286,15 @@ export default function App() {
         mapFlaggedToRow(item, transactionsById[index])
       );
     },
-    enabled: Boolean(token) && isAdmin,
-    refetchInterval: 8000
+    enabled: Boolean(token) && isAdmin
   });
 
   const {
     data: myAccount,
     error: myAccountError,
     refetch: refetchMyAccount,
-    isFetching: isLoadingAccount
+    isFetching: isFetchingAccount,
+    isLoading: isLoadingAccount
   } = useQuery({
     queryKey: ["my-account", token],
     queryFn: () => apiClient.getMyAccount(),
@@ -296,10 +305,11 @@ export default function App() {
   const {
     data: myTransactions,
     refetch: refetchMyTransactions,
-    isFetching: isLoadingTransactions
+    isFetching: isFetchingTransactions,
+    isLoading: isLoadingTransactions
   } = useQuery({
-    queryKey: ["my-transactions", token],
-    queryFn: () => apiClient.listMyTransactions(25),
+    queryKey: ["my-transactions", token, txLimit],
+    queryFn: () => apiClient.listMyTransactions(txLimit),
     enabled: Boolean(token) && isUser
   });
 
@@ -361,12 +371,18 @@ export default function App() {
     if (!token) {
       setAuthRole(null);
       setAuthUser(null);
+      setTxLimit(10);
       return;
     }
     const decoded = decodeJwt(token);
     setAuthRole(decoded?.role ?? "user");
     setAuthUser(decoded?.sub ?? null);
   }, [token]);
+
+  useEffect(() => {
+    if (!isUser) return;
+    setTxLimit(10);
+  }, [isUser]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -380,16 +396,18 @@ export default function App() {
 
     setTransactions(pendingFlagged);
     setSelectedTx((prev) => {
+      if (pendingFlagged.length === 0) return null;
       if (!prev && pendingFlagged.length > 0) return pendingFlagged[0] ?? null;
       if (!prev) return null;
       const found = pendingFlagged.find(
         (item) => item.flaggedId === prev.flaggedId
       );
-      return found ?? prev;
+      return found ?? pendingFlagged[0] ?? null;
     });
   }, [pendingFlagged]);
 
   useEffect(() => {
+    if (!isAdmin) return;
     if (!lastEvent) return;
 
     const event = lastEvent as DynamicWsEvent;
@@ -446,7 +464,23 @@ export default function App() {
     if (eventType.includes("flag") || eventType.includes("alert")) {
       void refetchPendingFlagged();
     }
-  }, [lastEvent, pushLog, refetchPendingFlagged]);
+  }, [isAdmin, lastEvent, pushLog, refetchPendingFlagged]);
+
+  useEffect(() => {
+    if (!isUser) return;
+    if (!lastEvent) return;
+    const event = lastEvent as DynamicWsEvent;
+    const eventType = String(event.type ?? "").toLowerCase();
+    if (
+      eventType === "transaction_status_updated" ||
+      eventType.includes("flag") ||
+      eventType.includes("alert")
+    ) {
+      void refetchMyAccount();
+      void refetchMyTransactions();
+    }
+  }, [isUser, lastEvent, refetchMyAccount, refetchMyTransactions]);
+
 
   const handleTransactionAction = useCallback(
     (
@@ -762,6 +796,7 @@ export default function App() {
                     accountId: tx.accountId ?? undefined
                   }))}
                   isLoading={isLoadingFlagged}
+                  onSelect={(tx) => setSelectedTx(tx)}
                   onTransactionAction={handleTransactionAction}
                 />
               </Card>
@@ -811,47 +846,118 @@ export default function App() {
             </section>
           </>
         ) : (
-          <section className="grid gap-5 lg:grid-cols-[1.5fr_2fr]">
+          <section className="grid gap-6 lg:grid-cols-[1.25fr_2fr]">
             <div className="flex flex-col gap-5">
-              <Card className="border-slate-700/40 bg-[#0b1220] p-5">
-                <h2 className="text-lg font-semibold">Mi cuenta</h2>
-                {accountMissing ? (
-                  <div className="mt-4 rounded-lg border border-dashed border-slate-700 p-4 text-xs text-slate-400">
-                    Aun no tienes cuenta. Completa el formulario para crearla.
+              <Card className="wallet-card p-6">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.3em] text-cyan-200/80">
+                      Billetera
+                    </p>
+                    <h2 className="mt-2 text-2xl font-semibold text-white">
+                      {authUser ?? "Cuenta"}
+                    </h2>
+                    <div className="mt-2 text-xs text-slate-200/70">
+                      {myAccount?.id
+                        ? `ACCT-${String(myAccount.id).padStart(5, "0")}`
+                        : "ACCT-PENDING"}
+                    </div>
                   </div>
-                ) : (
-                  <div className="mt-4 grid gap-3 text-sm text-slate-200">
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Saldo total</span>
-                      <span className="font-mono text-emerald-300">
-                        ${toNumber(myAccount?.balance).toFixed(2)}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="wallet-chip rounded-full px-3 py-1 text-[10px] uppercase tracking-[0.2em]">
+                      {accountMissing ? "Setup" : "Active"}
+                    </span>
+                    <span className="wallet-chip rounded-full px-3 py-1 text-[10px] uppercase tracking-[0.2em]">
+                      {txCountry}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-6">
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-300/70">
+                    Saldo disponible
+                  </p>
+                  <div className="wallet-amount balance-sheen mt-2 text-4xl font-semibold text-cyan-200">
+                    ${availableBalance.toFixed(2)}
+                  </div>
+                </div>
+
+                <div className="mt-6 grid gap-3 text-sm md:grid-cols-3">
+                  <div className="glass-panel rounded-xl p-3">
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Total</p>
+                    <div className="mt-2 font-mono text-emerald-300">
+                      ${toNumber(myAccount?.balance).toFixed(2)}
+                    </div>
+                  </div>
+                  <div className="glass-panel rounded-xl p-3">
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Retenido</p>
+                    <div className="mt-2 font-mono text-amber-300">
+                      ${toNumber(myAccount?.reserved_balance).toFixed(2)}
+                    </div>
+                  </div>
+                  <div className="glass-panel rounded-xl p-3">
+                    <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Estado</p>
+                    <div className="mt-2 text-xs text-slate-200">
+                      {accountMissing ? "Pendiente" : "Escudo antifraude"}
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              <Card className="send-panel p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="text-base font-semibold">
+                      {accountMissing ? "Crear cuenta" : "Enviar fondos"}
+                    </h2>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {accountMissing
+                        ? "Crea tu billetera para comenzar."
+                        : "Desliza el cash con estilo. 😎"}
+                    </p>
+                  </div>
+                  {!accountMissing && (
+                    <div className="debit-emoji">💳</div>
+                  )}
+                </div>
+
+                {!accountMissing && (
+                  <div className="debit-card mt-5 p-4 text-xs text-slate-200">
+                    <div className="flex items-center justify-between">
+                      <div className="debit-chip" />
+                      <span className="rounded-full bg-white/10 px-2 py-1 text-[10px] uppercase tracking-[0.2em]">
+                        Fintech
                       </span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Retenido</span>
-                      <span className="font-mono text-amber-300">
-                        ${toNumber(myAccount?.reserved_balance).toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Disponible</span>
-                      <span className="font-mono text-cyan-300">
-                        ${availableBalance.toFixed(2)}
-                      </span>
+                    <div className="mt-4 debit-stripe" />
+                    <div className="mt-4 flex items-center justify-between">
+                      <div>
+                        <div className="text-[10px] uppercase tracking-[0.2em] text-slate-400">
+                          Disponible
+                        </div>
+                        <div className="mt-1 text-lg font-semibold text-cyan-200">
+                          ${availableBalance.toFixed(2)}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[10px] uppercase tracking-[0.2em] text-slate-400">
+                          Cuenta
+                        </div>
+                        <div className="mt-1 text-xs">
+                          {myAccount?.id
+                            ? `ACCT-${String(myAccount.id).padStart(5, "0")}`
+                            : "ACCT-00000"}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 )}
-              </Card>
 
-              <Card className="border-slate-700/40 bg-[#0b1220] p-5">
-                <h2 className="text-base font-semibold">
-                  {accountMissing ? "Crear cuenta" : "Nueva transacción"}
-                </h2>
                 {accountMissing ? (
                   <form className="mt-4 space-y-3" onSubmit={handleCreateAccount}>
                     <div>
                       <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
-                        Nombre
+                        Nombre completo
                       </label>
                       <input
                         value={accountName}
@@ -888,7 +994,7 @@ export default function App() {
                       type="submit"
                       className="w-full rounded bg-cyan-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-700"
                     >
-                      Crear cuenta
+                      Crear billetera
                     </button>
                   </form>
                 ) : (
@@ -906,6 +1012,18 @@ export default function App() {
                         required
                         className="w-full rounded border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-white outline-none"
                       />
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {QUICK_AMOUNTS.map((amount) => (
+                          <button
+                            key={amount}
+                            type="button"
+                            onClick={() => setTxAmount(String(amount))}
+                            className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] text-white/70 transition hover:bg-white/10"
+                          >
+                            ${amount}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                     <div>
                       <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
@@ -930,49 +1048,81 @@ export default function App() {
               </Card>
             </div>
 
-            <Card className="border-slate-700/40 bg-[#0b1220] p-5">
+            <Card className="glass-panel p-5">
               <div className="mb-4 flex items-end justify-between">
                 <div>
-                  <h2 className="text-lg font-semibold">Mis movimientos</h2>
-                  <p className="text-xs text-slate-400">
-                    Ultimas transacciones registradas.
-                  </p>
+                  <h2 className="text-lg font-semibold">Actividad reciente</h2>
+                  <p className="text-xs text-slate-400">Tus ultimas transacciones.</p>
                 </div>
                 <div className="text-xs text-slate-400">
-                  {isLoadingTransactions ? "Cargando..." : `${myTransactions?.length ?? 0} registros`}
+                  {isLoadingTransactions
+                    ? "Cargando..."
+                    : `${myTransactions?.length ?? 0} movimientos`}
                 </div>
               </div>
 
-              <div className="space-y-2">
+              <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                <span className="status-pill rounded-full px-3 py-1">
+                  Limite actual: {txLimit}
+                </span>
+                {isFetchingTransactions && !isLoadingTransactions && (
+                  <span className="status-pill rounded-full px-3 py-1 text-emerald-300">
+                    Sincronizando...
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setTxLimit((prev) => prev + 10)}
+                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-white/70 transition hover:bg-white/10"
+                >
+                  Cargar 10 mas
+                </button>
+                {txLimit > 10 && (
+                  <button
+                    type="button"
+                    onClick={() => setTxLimit(10)}
+                    className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-white/70 transition hover:bg-white/10"
+                  >
+                    Volver a 10
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-3">
                 {isLoadingAccount || isLoadingTransactions ? (
                   <div className="panel p-6 text-center text-white/50">Cargando...</div>
                 ) : (myTransactions ?? []).length === 0 ? (
                   <div className="panel p-6 text-center text-white/50">
-                    Sin movimientos registrados.
+                    Sin movimientos aun.
                   </div>
                 ) : (
-                  (myTransactions ?? []).map((tx) => (
-                    <div key={tx.id} className="panel rounded-lg p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="text-sm font-semibold">TX #{tx.id}</div>
-                          <div className="text-xs text-slate-400">
-                            {tx.timestamp ? new Date(tx.timestamp).toLocaleString() : "-"}
+                  (myTransactions ?? []).map((tx) => {
+                    const uiStatus = normalizeStatus(tx.state);
+                    return (
+                      <div key={tx.id} className="tx-row rounded-xl p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-semibold">TX #{tx.id}</div>
+                            <div className="text-xs text-slate-400">
+                              {tx.timestamp ? new Date(tx.timestamp).toLocaleString() : "-"}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-sm font-mono text-emerald-300">
+                              ${toNumber(tx.amount).toFixed(2)}
+                            </div>
+                            <div className="text-xs text-slate-400">{tx.country}</div>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="text-sm font-mono text-emerald-300">
-                            ${toNumber(tx.amount).toFixed(2)}
-                          </div>
-                          <div className="text-xs text-slate-400">{tx.country}</div>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+                          <span className={`status-pill rounded-full px-3 py-1 ${statusTone(uiStatus)}`}>
+                            {uiStatus}
+                          </span>
+                          <span>IP {tx.ip}</span>
                         </div>
                       </div>
-                      <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
-                        <span>Estado: {normalizeStatus(tx.state)}</span>
-                        <span>IP: {tx.ip}</span>
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </Card>

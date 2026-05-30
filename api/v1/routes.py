@@ -35,7 +35,7 @@ from api.schemas import (
     TransactionStatusPatchRequest,
 )
 from core.config import settings
-from infrastructure.models import AccountState, AuthUser
+from infrastructure.models import AccountState, AuditState, AuthUser
 from repositories.postgres import (
     SqlAlchemyAccountRepository,
     SqlAlchemyTransactionRepository,
@@ -230,6 +230,20 @@ async def resolve_flagged(
             state=payload.state,
             auditor_notes=payload.auditor_notes,
         )
+    status = "Under Review"
+    if payload.state == AuditState.APROBADO:
+        status = "Aprobada"
+    elif payload.state == AuditState.BLOQUEADO:
+        status = "Rechazada"
+
+    event = {
+        "type": "transaction_status_updated",
+        "tx_id": updated.transaction_id,
+        "flagged_id": updated.id,
+        "status": status,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    await notification_hub.broadcast(event)
     return FlaggedResponse.model_validate(updated)
 
 
