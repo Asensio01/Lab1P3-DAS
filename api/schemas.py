@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, IPvAnyAddress
@@ -134,3 +135,21 @@ class TransactionQueryRequest(BaseModel):
     password: str = Field(..., min_length=4, max_length=128)
     limit: int = Field(25, ge=1, le=200)
     account_id: int | None = Field(default=None, ge=1)
+
+
+class SimulatorAlertRequest(BaseModel):
+    transaction_id: int | None = Field(default=None, ge=1)
+    anomaly: str = Field(..., min_length=3, max_length=300)
+    amount: Decimal | None = Field(default=None, gt=0)
+    country: str | None = Field(default=None, min_length=2, max_length=64)
+    ip: str | None = Field(default=None, min_length=7, max_length=64)
+    account: str | None = Field(default=None, min_length=3, max_length=64)
+    timestamp: datetime | None = None
+
+
+class TransactionStatusPatchRequest(BaseModel):
+    status: Literal["Blocked", "Approved"]
+
+
+class MessageResponse(BaseModel):
+    message: str
