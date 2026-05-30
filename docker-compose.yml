@@ -86,8 +86,7 @@ services:
       dockerfile: Dockerfile
     container_name: fintech_frontend
     restart: always
-    profiles:
-      - frontend
+    command: ["/bin/sh", "-c", "pnpm install && pnpm dev"]
     environment:
       VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
       VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8000/ws}
