@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS auth_user (
     id BIGSERIAL PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'admin',
+    role TEXT NOT NULL DEFAULT 'user', -- 'admin' o 'user'
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
