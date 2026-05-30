@@ -17,6 +17,7 @@ class AccountResponse(BaseModel):
     user_info: dict
     state: AccountState | None
     balance: Decimal | None
+    reserved_balance: Decimal | None
     version: int | None
 
 

@@ -48,6 +48,10 @@ class Account(Base):
     __tablename__ = "account"
     __table_args__ = (
         CheckConstraint("balance >= 0", name="ck_account_balance_nonnegative"),
+        CheckConstraint(
+            "reserved_balance >= 0",
+            name="ck_account_reserved_balance_nonnegative",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
@@ -69,6 +73,11 @@ class Account(Base):
         nullable=True,
     )
     balance: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2),
+        server_default=text("0.00"),
+        nullable=True,
+    )
+    reserved_balance: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2),
         server_default=text("0.00"),
         nullable=True,

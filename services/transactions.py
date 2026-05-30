@@ -63,8 +63,28 @@ class TransactionService:
         if account.state != AccountState.ACTIVO:
             raise AccountBlockedError("account is not active")
 
+        if (
+            account.balance is None
+            or account.version is None
+            or account.reserved_balance is None
+        ):
+            raise ValidationError("account balance or version missing")
+
+        available_balance = account.balance - account.reserved_balance
+        if available_balance < amount:
+            raise InsufficientFundsError("insufficient funds")
+
         anomaly = await self._antifraud.record_and_check(account_id, ip, amount)
         if anomaly:
+            updated = await self._account_repo.update_balances_with_version(
+                account_id=account.id,
+                expected_version=account.version,
+                balance_delta=Decimal("0"),
+                reserved_delta=amount,
+            )
+            if updated is None:
+                raise ConcurrencyConflictError("account version mismatch")
+
             transaction = Transaction(
                 account_id=account_id,
                 ip=ip,
@@ -95,15 +115,11 @@ class TransactionService:
                 )
             return TransactionResult(transaction=transaction, flagged=flagged)
 
-        if account.balance is None or account.version is None:
-            raise ValidationError("account balance or version missing")
-        if account.balance < amount:
-            raise InsufficientFundsError("insufficient funds")
-
-        updated = await self._account_repo.update_balance_with_version(
+        updated = await self._account_repo.update_balances_with_version(
             account_id=account.id,
             expected_version=account.version,
-            delta=-amount,
+            balance_delta=-amount,
+            reserved_delta=Decimal("0"),
         )
         if updated is None:
             raise ConcurrencyConflictError("account version mismatch")

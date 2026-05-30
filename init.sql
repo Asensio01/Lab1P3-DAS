@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS account (
     state account_state DEFAULT 'Activo',
     -- Campos cruciales para transacciones y concurrencia (Race Conditions)
     balance DECIMAL(12,2) DEFAULT 0.00 CHECK (balance >= 0),
+    reserved_balance DECIMAL(12,2) DEFAULT 0.00 CHECK (reserved_balance >= 0),
     version INTEGER DEFAULT 1
 );
 

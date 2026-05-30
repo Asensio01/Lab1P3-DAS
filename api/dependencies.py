@@ -78,8 +78,14 @@ async def get_transaction_service(
 async def get_audit_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> AuditServiceContext:
+    account_repo = SqlAlchemyAccountRepository(session)
+    transaction_repo = SqlAlchemyTransactionRepository(session)
     flagged_repo = SqlAlchemyFlaggedTransactionRepository(session)
-    service = AuditService(flagged_repo)
+    service = AuditService(
+        account_repo=account_repo,
+        transaction_repo=transaction_repo,
+        flagged_repo=flagged_repo,
+    )
     return AuditServiceContext(service=service, session=session)
 
 
