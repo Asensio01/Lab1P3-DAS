@@ -1,327 +1,666 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { AlertContainer } from "@/components/Alert";
+import {
+  FlaggedTransactionTable,
+  type FlaggedTransaction,
+  type UiStatus
+} from "@/components/FlaggedTransactionTable";
 import { Card } from "@/components/ui/card";
-import { StatusPill } from "@/components/StatusPill";
 import { useWebSocket } from "@/hooks/useWebSocket";
-//Holi prueba Brenda Donis
-// Estructura de la transacción para la visualización de auditoría
-interface Transaction {
-  id: string;
+import { apiClient, type TxStatusPayload } from "@/lib/api";
+
+interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+}
+
+interface FlaggedApiItem {
+  id: number;
+  transaction_id: number | null;
+  anomaly: string;
+  state: string | null;
+  auditor_notes: string | null;
+  resolved_at: string | null;
+  timestamp: string | null;
+}
+
+interface TransactionRow {
+  flaggedId: number;
+  transactionId: number;
   amount: number;
   country: string;
   anomaly: string;
-  status: "Blocked" | "Under Review" | "Approved";
+  status: UiStatus;
   timestamp: string;
   ip: string;
   account: string;
 }
 
-type FlaggedItem = {
-  id: number;
-  transaction_id: number | null;
-  anomaly: string;
-  state: string | null;
-  timestamp: string | null;
+type LogLevel = "BAN" | "WARN" | "INFO";
+
+interface SecurityLogEntry {
+  id: string;
+  level: LogLevel;
+  message: string;
+  time: string;
+}
+
+interface KpiState {
+  totalTransactions: number;
+  manualReview: number;
+  blockedOperations: number;
+}
+
+const WS_OPEN_STATES = new Set(["open"]);
+const STATUS_MAP: Record<string, UiStatus> = {
+  BLOQUEADA: "Bloqueada",
+  BLOQUEADO: "Bloqueada",
+  BLOCKED: "Bloqueada",
+  APROBADA: "Aprobada",
+  APROBADO: "Aprobada",
+  APPROVED: "Aprobada",
+  RECHAZADA: "Rechazada",
+  REJECTED: "Rechazada",
+  EN_REVISION: "Under Review",
+  EN_REVISIÓN: "Under Review",
+  UNDER_REVIEW: "Under Review",
+  PENDIENTE: "Under Review",
+  PENDING: "Under Review"
 };
 
+const countryPool: string[] = ["SV", "US", "MX", "CO", "PA", "GT"];
+const ipPool: string[] = [
+  "10.0.1.10",
+  "10.0.1.22",
+  "10.0.2.40",
+  "172.16.0.14",
+  "192.168.20.9",
+  "34.201.90.12"
+];
+
+type DynamicWsEvent = Record<string, unknown>;
+
+function readNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function readString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim().length > 0) return value;
+  }
+  return null;
+}
+
+function nowTimeLabel(): string {
+  return new Date().toLocaleTimeString("es-SV", { hour12: false });
+}
+
+function levelClass(level: LogLevel): string {
+  if (level === "BAN") return "text-rose-400";
+  if (level === "WARN") return "text-amber-400";
+  return "text-emerald-400";
+}
+
+function normalizeStatus(raw: string | null | undefined): UiStatus {
+  if (!raw) return "Under Review";
+  const key = raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "_");
+  return STATUS_MAP[key] ?? "Under Review";
+}
+
+function buildSyntheticAmount(seed: number): number {
+  const min = 850;
+  const max = 25000;
+  return min + ((seed * 137) % (max - min));
+}
+
+function mapFlaggedToRow(item: FlaggedApiItem): TransactionRow {
+  const txId = item.transaction_id ?? item.id;
+  return {
+    flaggedId: item.id,
+    transactionId: txId,
+    amount: buildSyntheticAmount(txId),
+    country: countryPool[txId % countryPool.length] ?? "SV",
+    anomaly: item.anomaly,
+    status: normalizeStatus(item.state),
+    timestamp: item.timestamp ?? new Date().toISOString(),
+    ip: ipPool[txId % ipPool.length] ?? "127.0.0.1",
+    account: `ACCT-${String((txId * 13) % 100000).padStart(5, "0")}`
+  };
+}
+
+function mapDynamicWsEventToRow(event: DynamicWsEvent): TransactionRow {
+  const transactionId = readNumber(
+    event.transaction_id,
+    event.tx_id,
+    event.id
+  ) ?? Date.now();
+
+  const flaggedId = readNumber(
+    event.flagged_id,
+    event.audit_id,
+    event.id,
+    transactionId
+  ) ?? transactionId;
+
+  const amountValue = readNumber(event.amount, event.total_amount, event.value);
+  const amount = amountValue ?? buildSyntheticAmount(transactionId);
+
+  const country =
+    readString(event.country, event.country_code, event.region) ??
+    countryPool[transactionId % countryPool.length] ??
+    "SV";
+
+  const ip =
+    readString(event.ip, event.source_ip, event.client_ip, event.origin_ip) ??
+    ipPool[transactionId % ipPool.length] ??
+    "127.0.0.1";
+
+  const anomaly =
+    readString(event.anomaly, event.reason, event.message, event.description) ??
+    "Evento recibido desde simulador";
+
+  const account =
+    readString(event.account, event.account_code, event.account_id) ??
+    `ACCT-${String((transactionId * 13) % 100000).padStart(5, "0")}`;
+
+  const statusRaw =
+    readString(event.state, event.status, event.transaction_state) ?? "Under Review";
+
+  const timestamp =
+    readString(event.timestamp, event.created_at, event.event_time) ??
+    new Date().toISOString();
+
+  return {
+    flaggedId,
+    transactionId,
+    amount,
+    country,
+    anomaly,
+    status: normalizeStatus(statusRaw),
+    timestamp,
+    ip,
+    account
+  };
+}
+
+function deriveKpis(rows: TransactionRow[]): KpiState {
+  return {
+    totalTransactions: rows.length,
+    manualReview: rows.filter((row) => row.status === "Under Review").length,
+    blockedOperations: rows.filter((row) => row.status === "Bloqueada").length
+  };
+}
+
 export default function App() {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("");
-  const [token, setToken] = useState(() => localStorage.getItem("authToken") ?? "");
-  const [loginError, setLoginError] = useState<string | null>(null);
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const apiBase = useMemo(
+    () =>
+      (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
+      "http://localhost:8000",
+    []
+  );
 
-  const apiBase = useMemo(() => {
-    return (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
-      "http://localhost:8000";
-  }, []);
+  const [username, setUsername] = useState<string>("");
+  const [password, setPassword] = useState<string>("");
+  const [token, setToken] = useState<string>("");
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isAuthenticating, setIsAuthenticating] = useState<boolean>(false);
 
-  const { state, url, lastMessage, lastEvent } = useWebSocket(token);
+  const [transactions, setTransactions] = useState<TransactionRow[]>([]);
+  const [selectedTx, setSelectedTx] = useState<TransactionRow | null>(null);
+  const [alerts, setAlerts] = useState<
+    Array<{ id: string; title: string; message: string; type: "success" | "error" | "warning" | "info" }>
+  >([]);
+  const [logs, setLogs] = useState<SecurityLogEntry[]>([
+    {
+      id: crypto.randomUUID(),
+      level: "INFO",
+      message: "Consola FinTech Guard inicializada.",
+      time: nowTimeLabel()
+    }
+  ]);
+
+  const wsUrlDirect = "ws://localhost:8000/ws";
+  const { state: wsState, url: wsUrl, lastEvent } = useWebSocket(token);
+
+  const kpis = useMemo(() => deriveKpis(transactions), [transactions]);
 
   const {
-    data: flaggedQueue,
-    refetch: refetchFlagged,
-    isFetching
+    data: pendingFlagged,
+    refetch: refetchPendingFlagged,
+    isFetching: isLoadingFlagged
   } = useQuery({
-    queryKey: ["flagged", token],
-    queryFn: async (): Promise<FlaggedItem[]> => {
+    queryKey: ["pending-flagged", token, apiBase],
+    queryFn: async (): Promise<FlaggedApiItem[]> => {
       const response = await fetch(`${apiBase}/api/v1/flagged/pending`, {
         headers: {
           Authorization: `Bearer ${token}`
         }
       });
       if (!response.ok) {
-        throw new Error("Failed to load flagged queue");
+        throw new Error("No fue posible cargar transacciones flagged.");
       }
-      return response.json();
+      return (await response.json()) as FlaggedApiItem[];
     },
     enabled: Boolean(token),
-    refetchInterval: 5000
+    refetchInterval: 8000
   });
 
-  useEffect(() => {
-    if (lastEvent?.type === "flagged") {
-      refetchFlagged();
-    }
-  }, [lastEvent, refetchFlagged]);
+  const pushAlert = useCallback(
+    (title: string, message: string, type: "success" | "error" | "warning" | "info"): void => {
+      const id = crypto.randomUUID();
+      setAlerts((prev) => [{ id, title, message, type }, ...prev].slice(0, 5));
+    },
+    []
+  );
 
-  const kpis = [
-    { label: "Transacciones activas", value: "1,248" },
-    { label: "Alertas en revision", value: String(flaggedQueue?.length ?? 0) },
-    { label: "Latencia promedio", value: "120ms" }
-  ];
+  const pushLog = useCallback((level: LogLevel, message: string): void => {
+    setLogs((prev) => [
+      {
+        id: crypto.randomUUID(),
+        level,
+        message,
+        time: nowTimeLabel()
+      },
+      ...prev
+    ]);
+  }, []);
 
-  const handleLogin = async () => {
-    setIsLoggingIn(true);
-    setLoginError(null);
+  async function handleLoginSubmit(e: React.FormEvent<HTMLFormElement>): Promise<void> {
+    e.preventDefault();
+    setIsAuthenticating(true);
+    setAuthError(null);
+
     try {
       const response = await fetch(`${apiBase}/api/v1/auth/login`, {
         method: "POST",
+        mode: "cors",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({
+          username,
+          password
+        })
       });
-      if (!response.ok) {
-        throw new Error("Invalid credentials");
-      }
-      const payload = await response.json();
-      setToken(payload.access_token);
-      localStorage.setItem("authToken", payload.access_token);
-    } catch (error) {
-      setLoginError((error as Error).message);
-    } finally {
-      setIsLoggingIn(false);
-    }
-  };
 
-  const handleLogout = () => {
-    setToken("");
-    localStorage.removeItem("authToken");
-  };
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(
+          `Autenticación fallida (${response.status}): ${detail || "sin detalle"}`
+        );
+      }
+
+      const payload = (await response.json()) as LoginResponse;
+      if (!payload.access_token) {
+        throw new Error("Respuesta de autenticación inválida.");
+      }
+
+      setToken(payload.access_token);
+      apiClient.setToken(payload.access_token);
+      apiClient.setTokenProvider(() => payload.access_token);
+      pushLog("INFO", `Token Bearer emitido para usuario ${username}.`);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Error de autenticación.";
+      setAuthError(message);
+      pushLog("WARN", `Fallo en autenticación manual: ${message}`);
+    } finally {
+      setIsAuthenticating(false);
+    }
+  }
+
+  useEffect(() => {
+    apiClient.setTokenProvider(() => token || null);
+    apiClient.setToken(token || null);
+  }, [token]);
+
+  useEffect(() => {
+    if (!pendingFlagged) return;
+
+    const mapped = pendingFlagged.map(mapFlaggedToRow);
+    setTransactions(mapped);
+    setSelectedTx((prev) => {
+      if (!prev && mapped.length > 0) return mapped[0] ?? null;
+      if (!prev) return null;
+      const found = mapped.find((item) => item.flaggedId === prev.flaggedId);
+      return found ?? prev;
+    });
+  }, [pendingFlagged]);
+
+  useEffect(() => {
+    if (!lastEvent) return;
+
+    const event = lastEvent as DynamicWsEvent;
+    const eventType = String(event.type ?? "").toLowerCase();
+
+    if (eventType === "transaction_status_updated") {
+      const txId = readNumber(event.tx_id, event.transaction_id, event.id);
+      const incomingStatusRaw = readString(event.status, event.state);
+      const incomingStatus = incomingStatusRaw ? normalizeStatus(incomingStatusRaw) : null;
+
+      if (!txId || !incomingStatus) return;
+
+      setTransactions((prev) =>
+        prev.map((row) =>
+          row.transactionId === txId || row.flaggedId === txId
+            ? { ...row, status: incomingStatus }
+            : row
+        )
+      );
+
+      setSelectedTx((prev) => {
+        if (!prev) return prev;
+        if (prev.transactionId === txId || prev.flaggedId === txId) {
+          return { ...prev, status: incomingStatus };
+        }
+        return prev;
+      });
+
+      pushLog(
+        incomingStatus === "Bloqueada" ? "BAN" : "INFO",
+        `Actualización WS: tx #${txId} -> ${incomingStatus}`
+      );
+      return;
+    }
+
+    const dynamicRow = mapDynamicWsEventToRow(event);
+
+    setTransactions((prev) => [
+      dynamicRow,
+      ...prev.filter(
+        (item) =>
+          item.flaggedId !== dynamicRow.flaggedId &&
+          item.transactionId !== dynamicRow.transactionId
+      )
+    ]);
+
+    setSelectedTx((prev) => prev ?? dynamicRow);
+
+    pushLog(
+      dynamicRow.status === "Bloqueada" ? "BAN" : "WARN",
+      `Evento WS ingestado (${eventType || "sin_tipo"}): tx #${dynamicRow.transactionId} ${dynamicRow.anomaly}`
+    );
+
+    if (eventType.includes("flag") || eventType.includes("alert")) {
+      void refetchPendingFlagged();
+    }
+  }, [lastEvent, pushLog, refetchPendingFlagged]);
+
+  const handleTransactionAction = useCallback(
+    (
+      tx: FlaggedTransaction,
+      payload: { status: TxStatusPayload; optimistic: boolean }
+    ) => {
+      const nextUiStatus = normalizeStatus(payload.status);
+
+      if (payload.optimistic) {
+        setTransactions((prev) =>
+          prev.map((row) =>
+            row.flaggedId === Number(tx.id) || row.transactionId === tx.transactionId
+              ? { ...row, status: nextUiStatus }
+              : row
+          )
+        );
+        setSelectedTx((prev) => {
+          if (!prev) return prev;
+          if (prev.flaggedId === Number(tx.id) || prev.transactionId === tx.transactionId) {
+            return { ...prev, status: nextUiStatus };
+          }
+          return prev;
+        });
+        pushLog(
+          nextUiStatus === "Bloqueada" ? "BAN" : "INFO",
+          `Actualización optimista aplicada a tx #${tx.transactionId}: ${nextUiStatus}`
+        );
+        return;
+      }
+
+      pushLog(
+        nextUiStatus === "Bloqueada" ? "BAN" : "INFO",
+        `Estado confirmado por backend en tx #${tx.transactionId}: ${nextUiStatus}`
+      );
+      pushAlert("Acción aplicada", `Tx #${tx.transactionId} => ${nextUiStatus}`, "success");
+    },
+    [pushAlert, pushLog]
+  );
+
+  const wsOpen = WS_OPEN_STATES.has(wsState);
+
+  if (!token) {
+    return (
+      <div className="min-h-screen bg-[#070b14] text-white">
+        <div className="mx-auto flex min-h-screen w-full max-w-md items-center px-4">
+          <Card className="w-full border-cyan-400/20 bg-[#0b1220]/90 p-6 shadow-[0_0_30px_rgba(34,211,238,0.08)]">
+            <p className="font-mono text-xs uppercase tracking-[0.35em] text-cyan-300">
+              FINTECH GUARD // LOGIN
+            </p>
+            <h1 className="mt-3 text-2xl font-semibold">Iniciar sesión</h1>
+            <p className="mt-2 text-sm text-slate-300">
+              Ingresa tus credenciales para conectar el dashboard.
+            </p>
+
+            <form className="mt-6 space-y-4" onSubmit={(e) => void handleLoginSubmit(e)}>
+              <div>
+                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+                  Usuario
+                </label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  required
+                  className="w-full rounded border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-400/70"
+                  placeholder="admin"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+                  Contraseña
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="w-full rounded border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-400/70"
+                  placeholder="••••••••"
+                />
+              </div>
+
+              {authError && <p className="text-sm text-rose-300">{authError}</p>}
+
+              <button
+                type="submit"
+                disabled={isAuthenticating}
+                className="w-full rounded bg-cyan-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isAuthenticating ? "Conectando..." : "Iniciar sesión"}
+              </button>
+            </form>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="page-shell px-4 py-8 md:px-12 md:py-10 text-white">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8">
-        
-        {/* Encabezado Principal */}
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-white/5 pb-6">
-          <div className="flex flex-col gap-1">
-            <p className="text-xs uppercase tracking-[0.4em] text-emerald-400 font-mono font-bold">
-               FINTECH GUARD // CONSOLA DE AUDITORÍA
-            </p>
-            <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">
-              Real-time Fraud Posture & Operations
-            </h1>
+    <div className="min-h-screen bg-[#070b14] text-white">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-7 md:px-10">
+        <header className="rounded-xl border border-cyan-400/20 bg-[#0b1220]/80 p-5 shadow-[0_0_30px_rgba(34,211,238,0.08)]">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.35em] text-cyan-300">
+                FINTECH GUARD // SOC CONSOLE
+              </p>
+              <h1 className="mt-2 text-2xl font-semibold md:text-3xl">
+                Real-time Fraud Posture & Operations
+              </h1>
+              <p className="mt-2 text-sm text-slate-300">
+                Integración activa con FastAPI + Simulador en tiempo real.
+              </p>
+            </div>
+
+            <div
+              className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-mono uppercase tracking-[0.2em] ${
+                wsOpen
+                  ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-300"
+                  : "border-amber-400/40 bg-amber-500/10 text-amber-300"
+              }`}
+            >
+              <span
+                className={`h-2.5 w-2.5 rounded-full ${
+                  wsOpen ? "bg-emerald-400 animate-pulse" : "bg-rose-400"
+                }`}
+              />
+              {wsOpen ? `CONNECTED ${wsUrl.replace("ws://", "")}` : "CLOSED"}
+            </div>
           </div>
-          <div className="panel px-4 py-2 rounded-lg flex items-center gap-3 text-xs font-mono">
-            <StatusPill status={state} />
-            <span className="text-white/60">Node: {url.replace("ws://", "")}</span>
+
+          <div className="mt-4 grid gap-2 text-xs text-slate-300 md:grid-cols-2">
+            <div>
+              Auth:{" "}
+              <span className="font-mono text-emerald-300">
+                {isAuthenticating ? "validando..." : token ? "bearer active" : "sin token"}
+              </span>
+            </div>
+            <div>
+              API: <span className="font-mono text-cyan-300">{apiBase}</span>
+            </div>
+            <div>
+              WS: <span className="font-mono text-cyan-300">{wsUrlDirect}</span>
+            </div>
+            <div>
+              Estado WS:{" "}
+              <span className="font-mono text-cyan-300">{wsState.toUpperCase()}</span>
+            </div>
+            {authError && (
+              <div className="md:col-span-2 text-rose-300">Error auth: {authError}</div>
+            )}
           </div>
         </header>
 
-        <section className="grid gap-6 md:grid-cols-[2fr_1fr]">
-          <Card className="stagger">
-            <h2 className="text-xl font-semibold">Acceso administrativo</h2>
-            <p className="mt-2 text-sm text-white/60">
-              Inicia sesion para monitorear alertas y recibir notificaciones.
+        <section className="grid gap-4 md:grid-cols-3">
+          <Card className="border-cyan-500/20 bg-[#0d1627] p-5">
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+              Transacciones Totales
             </p>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <input
-                className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white"
-                placeholder="Usuario"
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-              />
-              <input
-                className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white"
-                placeholder="Password"
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </div>
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <button
-                className="rounded-full bg-mint px-4 py-2 text-xs font-semibold uppercase tracking-[0.25em] text-black"
-                onClick={handleLogin}
-                disabled={isLoggingIn}
-              >
-                {isLoggingIn ? "Validando..." : "Iniciar sesion"}
-              </button>
-              {token && (
-                <button
-                  className="rounded-full border border-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.25em] text-white/70"
-                  onClick={handleLogout}
-                >
-                  Cerrar sesion
-                </button>
-              )}
-              {loginError && (
-                <span className="text-sm text-ember">{loginError}</span>
-              )}
-            </div>
+            <p className="mt-3 text-3xl font-semibold text-cyan-300">
+              {kpis.totalTransactions}
+            </p>
           </Card>
-          <Card className="stagger">
-            <h2 className="text-xl font-semibold">Cola de revision manual</h2>
-            <p className="mt-2 text-sm text-white/60">
-              {token
-                ? "Alertas pendientes de evaluacion."
-                : "Inicia sesion para visualizar la cola."}
+          <Card className="border-amber-500/20 bg-[#0d1627] p-5">
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+              En Revisión Manual
             </p>
-            <div className="mt-4 space-y-3 text-sm text-white/70">
-              {(flaggedQueue ?? []).slice(0, 4).map((item) => (
-                <div key={item.id} className="rounded-lg border border-white/10 px-3 py-2">
-                  <div className="text-xs text-white/60">#{item.id} - {item.anomaly}</div>
-                  <div className="text-[11px] text-white/40">
-                    Estado: {item.state ?? "Revision Pendiente"}
-                  </div>
-                </div>
-              ))}
-              {token && (flaggedQueue?.length ?? 0) === 0 && !isFetching && (
-                <div className="text-white/50">No hay alertas activas.</div>
-              )}
-              {isFetching && <div className="text-white/50">Cargando cola...</div>}
-            </div>
+            <p className="mt-3 text-3xl font-semibold text-amber-300">
+              {kpis.manualReview}
+            </p>
+          </Card>
+          <Card className="border-rose-500/20 bg-[#0d1627] p-5">
+            <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
+              Operaciones Bloqueadas
+            </p>
+            <p className="mt-3 text-3xl font-semibold text-rose-300">
+              {kpis.blockedOperations}
+            </p>
           </Card>
         </section>
 
-        <section className="grid gap-6 md:grid-cols-3">
-          {kpis.map((kpi) => (
-            <Card key={kpi.label} className="stagger">
-              <div className="text-sm text-white/60">{kpi.label}</div>
-              <div className="mt-3 text-3xl font-semibold text-white">
-                {kpi.value}
+        <section className="grid gap-5 lg:grid-cols-[3fr_1.25fr]">
+          <Card className="border-slate-700/40 bg-[#0b1220] p-5">
+            <div className="mb-4 flex items-end justify-between">
+              <div>
+                <h2 className="text-lg font-semibold">Transacciones Flagged</h2>
+                <p className="text-xs text-slate-400">
+                  Cola forense en vivo. Nuevas alertas entran al inicio.
+                </p>
               </div>
-            </Card>
-          ))}
-        </section>
-
-        {/* Cuerpo Principal del Dashboard */}
-        <section className="grid gap-6 lg:grid-cols-[3fr_1fr]">
-          
-          {/* Panel Izquierdo: Tabla de Flagged Transacciones */}
-          <Card className="panel p-6 flex flex-col gap-4 overflow-hidden">
-            <div>
-              <h2 className="text-lg font-medium tracking-tight">Flagged Transacciones</h2>
-              <p className="text-xs text-white/50">Responsividad web e interceptación instantánea de anomalías bancarias.</p>
+              <div className="text-xs text-slate-400">
+                {isLoadingFlagged ? "Sincronizando..." : `${transactions.length} registros`}
+              </div>
             </div>
 
-            <div className="overflow-x-auto rounded-lg border border-white/5">
-              <table className="w-full text-left border-collapse text-xs font-mono">
-                <thead>
-                  <tr className="bg-white/[0.02] border-b border-white/5 text-white/40 uppercase tracking-wider text-[10px]">
-                    <th className="p-3">ID Transacción</th>
-                    <th className="p-3">Monto</th>
-                    <th className="p-3">País de Origen</th>
-                    <th className="p-3">Tipo de Anomalía</th>
-                    <th className="p-3 text-right">Estado</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {transactions.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="p-8 text-center text-white/30 italic">
-                        Esperando tráfico sintético o ataques del simulador...
-                      </td>
-                    </tr>
-                  ) : (
-                    transactions.map((tx) => (
-                      <tr 
-                        key={tx.id} 
-                        onClick={() => setSelectedTx(tx)}
-                        className={`hover:bg-white/[0.03] transition-colors cursor-pointer ${selectedTx?.id === tx.id ? 'bg-white/[0.04]' : ''}`}
-                      >
-                        <td className="p-3 font-bold text-white/90">{tx.id}</td>
-                        <td className="p-3 text-emerald-400 font-semibold">${tx.amount.toLocaleString()}</td>
-                        <td className="p-3 text-white/70">{tx.country}</td>
-                        <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] ${
-                            tx.anomaly.includes("Lavado") || tx.anomaly.includes("Race")
-                              ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-                              : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-                          }`}>
-                            {tx.anomaly}
-                          </span>
-                        </td>
-                        <td className="p-3 text-right">
-                          <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                            tx.status === "Blocked" ? "bg-rose-950/80 text-rose-400 border border-rose-800" :
-                            tx.status === "Under Review" ? "bg-amber-950/80 text-amber-400 border border-amber-800 animate-pulse" :
-                            "bg-emerald-950/80 text-emerald-400 border border-emerald-800"
-                          }`}>
-                            {tx.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <FlaggedTransactionTable
+              transactions={transactions.map((tx) => ({
+                id: String(tx.flaggedId),
+                transactionId: tx.transactionId,
+                amount: tx.amount,
+                country: tx.country,
+                anomaly: tx.anomaly,
+                status: tx.status,
+                timestamp: tx.timestamp,
+                ip: tx.ip,
+                account: tx.account
+              }))}
+              isLoading={isLoadingFlagged}
+              onTransactionAction={handleTransactionAction}
+            />
           </Card>
 
-          {/* Panel Derecho: Consola de Inspección Forense / Acciones Rápidas */}
-          <div className="flex flex-col gap-4">
-            <Card className="panel p-6 flex flex-col gap-4">
-              <h2 className="text-base font-semibold tracking-tight">Inspector de Riesgo</h2>
-              
-              {selectedTx ? (
-                <div className="space-y-4 animate-fadeIn">
-                  <div className="p-3 bg-white/[0.02] rounded border border-white/5 space-y-2 text-xs font-mono">
-                    <div className="flex justify-between"><span className="text-white/40">ID:</span> <span className="text-white font-bold">{selectedTx.id}</span></div>
-                    <div className="flex justify-between"><span className="text-white/40">Monto:</span> <span className="text-emerald-400 font-bold">${selectedTx.amount}</span></div>
-                    <div className="flex justify-between"><span className="text-white/40">IP Origen:</span> <span>{selectedTx.ip}</span></div>
-                    <div className="flex justify-between"><span className="text-white/40">Cuenta:</span> <span>{selectedTx.account}</span></div>
-                    <div className="flex justify-between"><span className="text-white/40">Ubicación:</span> <span>{selectedTx.country}</span></div>
-                  </div>
-
-                  <div className="p-2.5 bg-rose-500/5 rounded border border-rose-500/10 text-[11px] text-rose-300">
-                    <span className="font-bold block mb-0.5">Veredicto del Motor:</span>
-                    {selectedTx.anomaly}
-                  </div>
-
-                  {selectedTx.status === "Under Review" && (
-                    <div className="grid grid-cols-2 gap-2 pt-2">
-                      <button 
-                        onClick={() => handleUpdateStatus(selectedTx.id, "Blocked")}
-                        className="w-full bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-medium text-xs py-2 px-3 rounded transition-all shadow-md shadow-rose-900/20"
-                      >
-                        ❌ Bloquear
-                      </button>
-                      <button 
-                        onClick={() => handleUpdateStatus(selectedTx.id, "Approved")}
-                        className="w-full bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-medium text-xs py-2 px-3 rounded transition-all shadow-md shadow-emerald-900/20"
-                      >
-                        ✅ Aprobar
-                      </button>
-                    </div>
-                  )}
-                  
-                  {selectedTx.status !== "Under Review" && (
-                    <div className="text-center p-3 border border-white/5 bg-white/[0.01] rounded text-xs text-white/40 italic">
-                      Operación dictaminada como: <span className="text-white font-mono not-italic uppercase font-bold text-[10px] ml-1">{selectedTx.status}</span>
-                    </div>
-                  )}
+          <div className="flex flex-col gap-5">
+            <Card className="border-slate-700/40 bg-[#0b1220] p-5">
+              <h2 className="text-base font-semibold">Inspector de Riesgo</h2>
+              {!selectedTx ? (
+                <div className="mt-4 rounded-lg border border-dashed border-slate-700 p-6 text-center text-xs text-slate-400">
+                  Selecciona una transacción para inspección forense.
                 </div>
               ) : (
-                <div className="text-xs text-white/40 italic text-center py-12 border border-dashed border-white/10 rounded">
-                  Selecciona una transacción de la cola de alertas para auditar su payload.
+                <div className="mt-4 space-y-4 text-xs font-mono">
+                  <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+                    <div className="flex justify-between"><span className="text-slate-400">Flagged ID</span><span>{selectedTx.flaggedId}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">Tx ID</span><span>{selectedTx.transactionId}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">Monto</span><span className="text-emerald-300">${selectedTx.amount}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">País</span><span>{selectedTx.country}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">IP</span><span>{selectedTx.ip}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">Cuenta</span><span>{selectedTx.account}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-400">Timestamp</span><span>{new Date(selectedTx.timestamp).toLocaleString()}</span></div>
+                  </div>
+
+                  <div className="rounded border border-rose-500/30 bg-rose-500/10 p-3 text-rose-200">
+                    <span className="block text-[10px] uppercase tracking-wider text-rose-300/80">
+                      Veredicto del Motor
+                    </span>
+                    <span>{selectedTx.anomaly}</span>
+                  </div>
                 </div>
               )}
             </Card>
 
-            <Card className="panel p-6">
-              <h2 className="text-base font-semibold tracking-tight mb-3">Logs de Seguridad</h2>
-              <div className="space-y-2 text-[11px] font-mono text-white/60">
-                <div className="flex gap-2 text-rose-400"><span className="text-white/30">[IDS]</span> IP 10.0.1.30 bloqueada por ráfaga DDoS.</div>
-                <div className="flex gap-2 text-amber-400"><span className="text-white/30">[WARN]</span> Intento fallido de lectura en DB.</div>
-                <div className="flex gap-2 text-emerald-400"><span className="text-white/30">[INFO]</span> Optimistic Locking activo en balance.</div>
+            <Card className="border-slate-700/40 bg-[#0b1220] p-5">
+              <h2 className="mb-3 text-base font-semibold">Logs de Seguridad</h2>
+              <div className="max-h-72 space-y-2 overflow-y-auto rounded border border-slate-700 bg-black/30 p-3 text-[11px] font-mono">
+                {logs.map((entry) => (
+                  <div key={entry.id} className={`flex gap-2 ${levelClass(entry.level)}`}>
+                    <span className="text-slate-500">[{entry.time}]</span>
+                    <span className="text-slate-300">[{entry.level}]</span>
+                    <span>{entry.message}</span>
+                  </div>
+                ))}
               </div>
             </Card>
           </div>
-
         </section>
       </div>
+      <AlertContainer
+        alerts={alerts.map((a) => ({
+          ...a,
+          dismissible: true
+        }))}
+        onRemove={(id) => setAlerts((prev) => prev.filter((a) => a.id !== id))}
+      />
     </div>
   );
 }
