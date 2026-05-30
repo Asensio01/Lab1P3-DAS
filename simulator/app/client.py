@@ -4,9 +4,12 @@ import httpx
 import asyncio
 import random
 import time
+import base64
+import json
 from decimal import Decimal
 from app.config import settings
 from app.types import TransactionCreate
+from app.redis_client import redis_db
 
 logger = logging.getLogger("simulator")
 base_api_url = f"{settings.BACKEND_URL.rstrip('/')}/api/v1"
@@ -48,7 +51,7 @@ async def garantizar_cuentas_iniciales():
     async with httpx.AsyncClient(base_url=base_api_url, timeout=10.0) as client:
         try:
             # Intentamos verificar si la cuenta 1 existe (o puedes crear un endpoint /accounts/ para verificar)
-            response = await client.get("/accounts/1", headers=headers)
+            response = await client.get("/accounts/active", headers=headers)
             if response.status_code == 200:
                 logger.info("Cuentas base detectadas en el sistema.")
                 return [1, 2] # IDs asumidos que ya existen
@@ -84,6 +87,10 @@ async def enviar_transaccion(tx: TransactionCreate, max_retries: int = 5):
     limits = httpx.Limits(max_keepalive_connections=100, max_connections=200)
     token = await get_access_token()
     headers = {"Authorization": f"Bearer {token}"}
+
+    # Informacion a retornar
+    tx_data = tx.model_dump(mode="json")
+
     async with httpx.AsyncClient(base_url=base_api_url, timeout=30.0, limits=limits) as client:
         for intento in range(1, max_retries + 1):
             try:
@@ -95,7 +102,13 @@ async def enviar_transaccion(tx: TransactionCreate, max_retries: int = 5):
                 
                 if response.status_code in (200, 201):
                     logger.info(f"✅ Transacción exitosa -> Cuenta: {tx.account_id} | Monto: ${tx.amount}")
-                    return # Éxito, salimos de la función
+                    return {
+                        "status": "SUCCESS",
+                        "status_code": response.status_code,
+                        "intentos": intento,
+                        "details": response.json() if response.text else {},
+                        "transaction": tx_data
+                    }
                     
                 elif response.status_code == 409:
                     # Es un conflicto de versión de cuenta. Esperamos un momento y reintentamos.
@@ -112,11 +125,23 @@ async def enviar_transaccion(tx: TransactionCreate, max_retries: int = 5):
                     # Si el backend responde 403, significa que la IP fue bloqueada por antifraude o el Rate Limit.
                     # Esto está BIEN en la simulación, significa que el backend se defendió.
                     logger.error(f"🛑 Backend Bloqueó la Transacción (403 Forbidden): {response.text}")
-                    return
+                    return {
+                        "status": "BLOCKED",
+                        "status_code": 403,
+                        "intentos": intento,
+                        "details": response.json() if response.text else {"message": "Forbidden"},
+                        "transaction": tx_data
+                    }
                     
                 else:
                     logger.error(f"❌ Backend rechazó transacción: {response.status_code} - {response.text}")
-                    return
+                    return {
+                        "status": "REJECTED",
+                        "status_code": response.status_code,
+                        "intentos": intento,
+                        "details": response.text,
+                        "transaction": tx_data
+                    }
             
             except httpx.TimeoutException:
                 logger.error(f"⏳ [Intento {intento}] ¡Timeout de red esperando al backend para la cuenta {tx.account_id}!")
@@ -128,80 +153,88 @@ async def enviar_transaccion(tx: TransactionCreate, max_retries: int = 5):
                 await asyncio.sleep(0.5)
                 
         logger.error(f"🚨 Transacción para cuenta {tx.account_id} falló definitivamente tras {max_retries} reintentos.")
+        return {
+            "status": "FAILED",
+            "status_code": 500,
+            "intentos": max_retries,
+            "details": "Falló tras máximos reintentos por red o timeout.",
+            "transaction": tx_data
+        }
 
 async def obtener_cuentas_candidatas_fraude() -> list[dict]:
     """
     Consulta al backend los detalles de las cuentas para verificar 
     cuáles están Activas y tienen saldo suficiente (>= 27000).
     """
-    cuentas_aptas = []
-    
     token = await get_access_token()
     headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(base_url=base_api_url, timeout=5.0) as client:
-        # Consultamos las primeras cuentas del sistema (ej: IDs del 1 al 10)
-        for account_id in range(1, 50):
-            try:
-                res = await client.get(f"/accounts/{account_id}", headers=headers)
-                if res.status_code == 200:
-                    acc = res.json()
-                    # Validamos requisitos estructurales de la DB
-                    balance = float(acc.get("balance", 0) or 0)
-                    if acc.get("state") == "Activo" and balance >= 36000.00:
-                        cuentas_aptas.append(acc)
-            except Exception:
-                continue
-                
-    return cuentas_aptas
+        try:
+            # Enviamos el min_balance requerido en los parámetros de la URL
+            response = await client.get(
+                "/accounts/active", 
+                params={"min_balance": "36000.00"}, 
+                headers=headers
+            )
+            if response.status_code == 200:
+                # El backend ya devuelve la lista filtrada de cuentas aptas
+                return response.json()
+        except Exception as e:
+            logger.error(f"Error al obtener cuentas candidatas de fraude: {e}")
+            
+    return []
 
 async def obtener_cuentas_candidatas_estres() -> list[dict]:
     """
     Consulta al backend los detalles de las cuentas para verificar 
     cuáles están Activas y tienen saldo suficiente (>= 1000).
     """
-    cuentas_ids = []
-    
     token = await get_access_token()
     headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(base_url=base_api_url, timeout=5.0) as client:
-        # Consultamos las primeras cuentas del sistema (ej: IDs del 1 al 10)
-        for account_id in range(1, 50):
-            try:
-                res = await client.get(f"/accounts/{account_id}", headers=headers)
-                if res.status_code == 200:
-                    acc = res.json()
-                    # Validamos requisitos estructurales de la DB
-                    balance = float(acc.get("balance", 0) or 0)
-                    if acc.get("state") == "Activo" and balance >= 1000.00:
-                        cuentas_ids.append(account_id)
-            except Exception:
-                continue
-                
-    return cuentas_ids
+        try:
+            response = await client.get(
+                "/accounts/active", 
+                params={"min_balance": "1000.00"}, 
+                headers=headers
+            )
+            if response.status_code == 200:
+                cuentas = response.json()
+                # Mapeamos para retornar solo la lista de IDs que espera el escenario de estrés
+                return [acc["id"] for acc in cuentas]
+        except Exception as e:
+            logger.error(f"Error al obtener cuentas candidatas de estrés: {e}")
+            
+    return []
 
 async def obtener_cuentas_candidatas_doble_pago() -> list[dict]:
     """
     Consulta al backend los detalles de las cuentas para verificar 
     cuáles están Activas y tienen saldo suficiente (> 0.01).
     """
-    cuentas_aptas = []
-    
     token = await get_access_token()
     headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(base_url=base_api_url, timeout=5.0) as client:
-        # Consultamos las primeras cuentas del sistema (ej: IDs del 1 al 15)
-        for account_id in range(1, 15):
-            try:
-                res = await client.get(f"/accounts/{account_id}", headers=headers)
-                if res.status_code == 200:
-                    acc = res.json()
-                    balance = Decimal(str(acc.get("balance", "0") or "0"))
-                    if acc.get("state") == "Activo" and balance > Decimal("0.01"):
-                        cuentas_aptas.append({"id": account_id, "balance": balance})
-            except Exception:
-                continue
-                
-    return cuentas_aptas
+        try:
+            response = await client.get(
+                "/accounts/active", 
+                params={"min_balance": "0.01"}, 
+                headers=headers
+            )
+            if response.status_code == 200:
+                cuentas = response.json()
+                # Formateamos la respuesta para mantener compatibilidad con tu código original
+                return [
+                    {
+                        "id": acc["id"], 
+                        "balance": Decimal(str(acc.get("balance", "0")))
+                    } 
+                    for acc in cuentas
+                ]
+        except Exception as e:
+            logger.error(f"Error al obtener cuentas candidatas de doble pago: {e}")
+            
+    return []
 
 async def enviar_transaccion_con_feedback(tx: TransactionCreate) -> dict:
     """Envía una transacción sin reintentos automáticos para evaluar si el backend frena el choque."""
@@ -223,14 +256,37 @@ async def enviar_transaccion_con_feedback(tx: TransactionCreate) -> dict:
             return {"status": 500, "detail": f"Error de conexión: {str(e)}"}
 
 
-async def verificar_token_expirado(account_id: int) -> dict:
-    token, expires_in = await _login_for_token()
-    await asyncio.sleep(expires_in + 1)
-    headers = {"Authorization": f"Bearer {token}"}
-
-    async with httpx.AsyncClient(base_url=base_api_url, timeout=10.0) as client:
-        response = await client.get(f"/accounts/{account_id}", headers=headers)
-        return {
-            "status": response.status_code,
-            "detail": response.json() if response.status_code in (200, 401, 403, 404) else response.text,
+async def verificar_token_expirado_bg(simulation_id: str, account_id: int):
+    """
+    Duerme eficientemente en segundo plano hasta que el token expire de verdad,
+    luego consulta al backend y guarda el resultado estricto en Redis.
+    """
+    try:
+        # 1. Obtenemos el token y su tiempo de vida (ej: 900 segundos)
+        token, expires_in = await _login_for_token()
+        
+        # 2. Esperamos en segundo plano. Cero consumo de CPU durante la espera.
+        await asyncio.sleep(expires_in + 2) 
+        
+        # 3. Al despertar, el token ya expiró estrictamente en el Backend. Ejecutamos la prueba.
+        headers = {"Authorization": f"Bearer {token}"}
+        async with httpx.AsyncClient(base_url=base_api_url, timeout=10.0) as client:
+            response = await client.get(f"/accounts/{account_id}", headers=headers)
+            
+            # 4. Estructuramos el reporte final esperado
+            reporte_final = {
+                "status": "COMPLETED",
+                "resultado": {
+                    "status_code": response.status_code,
+                    "detail": response.json() if response.status_code in (200, 401, 403, 404) else response.text,
+                }
+            }
+            
+    except Exception as e:
+        reporte_final = {
+            "status": "FAILED",
+            "message": f"Error durante la simulación de fondo: {str(e)}"
         }
+
+    # 5. Guardamos en Redis para que React pueda verlo
+    redis_db.setex(f"sim:{simulation_id}", 7200, json.dumps(reporte_final))
