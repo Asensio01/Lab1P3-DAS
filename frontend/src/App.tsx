@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { jwtDecode } from "jwt-decode";
 
 import { AlertContainer } from "@/components/Alert";
 import {
@@ -8,6 +9,8 @@ import {
   type UiStatus
 } from "@/components/FlaggedTransactionTable";
 import { Card } from "@/components/ui/card";
+import { SetupAccountForm } from "@/components/SetupAccountForm";
+import { UserDashboard } from "@/components/UserDashboard";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { apiClient, type FlaggedResponse, type TransactionResponse } from "@/lib/api";
 
@@ -24,6 +27,12 @@ interface TransactionRow {
   ip: string;
   account: string;
   accountId?: number | null;
+}
+
+interface DecodedToken {
+  sub?: string;
+  role?: Role;
+  [key: string]: unknown;
 }
 
 type LogLevel = "BAN" | "WARN" | "INFO";
@@ -194,13 +203,9 @@ function deriveKpis(rows: TransactionRow[]): KpiState {
   };
 }
 
-function decodeJwt(token: string): { sub?: string; role?: Role } | null {
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
+function safeDecodeJwt(token: string): DecodedToken | null {
   try {
-    const payload = parts[1] ?? "";
-    const decoded = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
-    return JSON.parse(decoded) as { sub?: string; role?: Role };
+    return jwtDecode<DecodedToken>(token);
   } catch {
     return null;
   }
@@ -222,6 +227,7 @@ export default function App() {
   );
   const [authRole, setAuthRole] = useState<Role | null>(null);
   const [authUser, setAuthUser] = useState<string | null>(null);
+  const [hasAccount, setHasAccount] = useState<boolean | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState<boolean>(false);
 
@@ -341,7 +347,9 @@ export default function App() {
       setToken(payload.access_token);
       apiClient.setToken(payload.access_token);
       apiClient.setTokenProvider(() => payload.access_token);
-      const decoded = decodeJwt(payload.access_token);
+      
+      // Decode JWT to extract role and username
+      const decoded = safeDecodeJwt(payload.access_token);
       setAuthRole(decoded?.role ?? "user");
       setAuthUser(decoded?.sub ?? username);
       pushLog("INFO", `Token Bearer emitido para usuario ${username}.`);
@@ -361,12 +369,51 @@ export default function App() {
     if (!token) {
       setAuthRole(null);
       setAuthUser(null);
+      setHasAccount(null);
       return;
     }
-    const decoded = decodeJwt(token);
+    const decoded = safeDecodeJwt(token);
     setAuthRole(decoded?.role ?? "user");
     setAuthUser(decoded?.sub ?? null);
   }, [token]);
+
+  // Check if user has account (for "user" role)
+  useEffect(() => {
+    if (authRole !== "user" || !token) {
+      setHasAccount(null);
+      return;
+    }
+
+    const checkAccount = async (): Promise<void> => {
+      try {
+        const response = await fetch(`${apiBase}/api/v1/me/account`, {
+          headers: {
+            "Authorization": `Bearer ${token}`
+          }
+        });
+
+        if (response.status === 404) {
+          setHasAccount(false);
+        } else if (response.ok) {
+          setHasAccount(true);
+        } else {
+          // Other error - clear session
+          setToken("");
+          apiClient.setToken(null);
+          setTransactions([]);
+          setSelectedTx(null);
+        }
+      } catch {
+        // Network error - clear session
+        setToken("");
+        apiClient.setToken(null);
+        setTransactions([]);
+        setSelectedTx(null);
+      }
+    };
+
+    void checkAccount();
+  }, [authRole, token, apiBase]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -540,6 +587,7 @@ export default function App() {
     apiClient.setToken(null);
     setTransactions([]);
     setSelectedTx(null);
+    setHasAccount(null);
   }, []);
 
   const wsOpen = WS_OPEN_STATES.has(wsState);
@@ -622,87 +670,43 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#070b14] text-white">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-7 md:px-10">
-        <header className="rounded-xl border border-cyan-400/20 bg-[#0b1220]/80 p-5 shadow-[0_0_30px_rgba(34,211,238,0.08)]">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="font-mono text-xs uppercase tracking-[0.35em] text-cyan-300">
-                FINTECH GUARD // {isAdmin ? "SOC CONSOLE" : "CLIENT PORTAL"}
-              </p>
-              <h1 className="mt-2 text-2xl font-semibold md:text-3xl">
-                {isAdmin
-                  ? "Real-time Fraud Posture & Operations"
-                  : "Mi cuenta y operaciones"}
-              </h1>
-              <p className="mt-2 text-sm text-slate-300">
-                {isAdmin
-                  ? "Integración activa con FastAPI + Simulador en tiempo real."
-                  : "Gestiona tu saldo y transacciones con antifraude activo."}
-              </p>
-            </div>
-
-            {isAdmin ? (
-              <div
-                className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-mono uppercase tracking-[0.2em] ${
-                  wsOpen
-                    ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-300"
-                    : "border-amber-400/40 bg-amber-500/10 text-amber-300"
-                }`}
-              >
-                <span
-                  className={`h-2.5 w-2.5 rounded-full ${
-                    wsOpen ? "bg-emerald-400 animate-pulse" : "bg-rose-400"
-                  }`}
-                />
-                {wsOpen ? `CONNECTED ${wsUrl.replace("ws://", "")}` : "CLOSED"}
+        {/* Loading state for user role - checking account status */}
+        {authRole === "user" && hasAccount === null && (
+          <div className="flex min-h-screen items-center justify-center">
+            <Card className="border-cyan-400/20 bg-[#0b1220]/90 p-8 shadow-[0_0_30px_rgba(34,211,238,0.08)] text-center">
+              <div className="animate-pulse">
+                <div className="h-8 w-8 rounded-full border-4 border-cyan-400/30 border-t-cyan-400 mx-auto mb-4"></div>
               </div>
-            ) : (
-              <div className="text-xs text-slate-300">
-                Usuario: <span className="font-mono text-emerald-300">{authUser}</span>
-              </div>
-            )}
+              <p className="text-lg text-cyan-300">Verificando expediente financiero...</p>
+              <p className="mt-2 text-sm text-slate-400">
+                Por favor espera mientras verificamos el estado de tu cuenta.
+              </p>
+            </Card>
           </div>
+        )}
 
-          <div className="mt-4 grid gap-2 text-xs text-slate-300 md:grid-cols-2">
-            <div>
-              Auth:{" "}
-              <span className="font-mono text-emerald-300">
-                {isAuthenticating ? "validando..." : token ? "bearer active" : "sin token"}
-              </span>
-            </div>
-            <div>
-              API: <span className="font-mono text-cyan-300">{apiBase}</span>
-            </div>
-            {isAdmin && (
-              <>
-                <div>
-                  WS: <span className="font-mono text-cyan-300">{wsUrlDirect}</span>
-                </div>
-                <div>
-                  Estado WS:{" "}
-                  <span className="font-mono text-cyan-300">{wsState.toUpperCase()}</span>
-                </div>
-              </>
-            )}
-            <div>
-              Rol:{" "}
-              <span className="font-mono text-cyan-300">{authRole ?? "-"}</span>
-            </div>
-            {authError && (
-              <div className="md:col-span-2 text-rose-300">Error auth: {authError}</div>
-            )}
-          </div>
+        {/* Setup account form for users without an account */}
+        {authRole === "user" && hasAccount === false && (
+          <SetupAccountForm
+            token={token}
+            onSuccess={() => setHasAccount(true)}
+            onError={() => {
+              // Optionally handle error
+            }}
+          />
+        )}
 
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="rounded border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/70 transition hover:bg-white/10"
-            >
-              Cerrar sesión
-            </button>
-          </div>
-        </header>
-        {isAdmin ? (
+        {/* User dashboard for authenticated users with account */}
+        {authRole === "user" && hasAccount === true && (
+          <UserDashboard
+            token={token}
+            username={authUser ?? undefined}
+            onLogout={handleLogout}
+          />
+        )}
+
+        {/* Admin SOC console */}
+        {isAdmin && (
           <>
             <section className="grid gap-4 md:grid-cols-3">
               <Card className="border-cyan-500/20 bg-[#0d1627] p-5">
@@ -810,173 +814,6 @@ export default function App() {
               </div>
             </section>
           </>
-        ) : (
-          <section className="grid gap-5 lg:grid-cols-[1.5fr_2fr]">
-            <div className="flex flex-col gap-5">
-              <Card className="border-slate-700/40 bg-[#0b1220] p-5">
-                <h2 className="text-lg font-semibold">Mi cuenta</h2>
-                {accountMissing ? (
-                  <div className="mt-4 rounded-lg border border-dashed border-slate-700 p-4 text-xs text-slate-400">
-                    Aun no tienes cuenta. Completa el formulario para crearla.
-                  </div>
-                ) : (
-                  <div className="mt-4 grid gap-3 text-sm text-slate-200">
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Saldo total</span>
-                      <span className="font-mono text-emerald-300">
-                        ${toNumber(myAccount?.balance).toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Retenido</span>
-                      <span className="font-mono text-amber-300">
-                        ${toNumber(myAccount?.reserved_balance).toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Disponible</span>
-                      <span className="font-mono text-cyan-300">
-                        ${availableBalance.toFixed(2)}
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </Card>
-
-              <Card className="border-slate-700/40 bg-[#0b1220] p-5">
-                <h2 className="text-base font-semibold">
-                  {accountMissing ? "Crear cuenta" : "Nueva transacción"}
-                </h2>
-                {accountMissing ? (
-                  <form className="mt-4 space-y-3" onSubmit={handleCreateAccount}>
-                    <div>
-                      <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
-                        Nombre
-                      </label>
-                      <input
-                        value={accountName}
-                        onChange={(e) => setAccountName(e.target.value)}
-                        required
-                        className="w-full rounded border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-white outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
-                        DUI
-                      </label>
-                      <input
-                        value={accountDui}
-                        onChange={(e) => setAccountDui(e.target.value)}
-                        required
-                        className="w-full rounded border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-white outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
-                        Saldo inicial (opcional)
-                      </label>
-                      <input
-                        type="number"
-                        value={initialBalance}
-                        onChange={(e) => setInitialBalance(e.target.value)}
-                        min={0}
-                        step={0.01}
-                        className="w-full rounded border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-white outline-none"
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      className="w-full rounded bg-cyan-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-700"
-                    >
-                      Crear cuenta
-                    </button>
-                  </form>
-                ) : (
-                  <form className="mt-4 space-y-3" onSubmit={handleCreateTransaction}>
-                    <div>
-                      <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
-                        Monto
-                      </label>
-                      <input
-                        type="number"
-                        value={txAmount}
-                        onChange={(e) => setTxAmount(e.target.value)}
-                        min={0.01}
-                        step={0.01}
-                        required
-                        className="w-full rounded border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-white outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
-                        Pais
-                      </label>
-                      <input
-                        value={txCountry}
-                        onChange={(e) => setTxCountry(e.target.value.toUpperCase())}
-                        maxLength={2}
-                        required
-                        className="w-full rounded border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-white outline-none"
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      className="w-full rounded bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700"
-                    >
-                      Enviar transaccion
-                    </button>
-                  </form>
-                )}
-              </Card>
-            </div>
-
-            <Card className="border-slate-700/40 bg-[#0b1220] p-5">
-              <div className="mb-4 flex items-end justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold">Mis movimientos</h2>
-                  <p className="text-xs text-slate-400">
-                    Ultimas transacciones registradas.
-                  </p>
-                </div>
-                <div className="text-xs text-slate-400">
-                  {isLoadingTransactions ? "Cargando..." : `${myTransactions?.length ?? 0} registros`}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                {isLoadingAccount || isLoadingTransactions ? (
-                  <div className="panel p-6 text-center text-white/50">Cargando...</div>
-                ) : (myTransactions ?? []).length === 0 ? (
-                  <div className="panel p-6 text-center text-white/50">
-                    Sin movimientos registrados.
-                  </div>
-                ) : (
-                  (myTransactions ?? []).map((tx) => (
-                    <div key={tx.id} className="panel rounded-lg p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="text-sm font-semibold">TX #{tx.id}</div>
-                          <div className="text-xs text-slate-400">
-                            {tx.timestamp ? new Date(tx.timestamp).toLocaleString() : "-"}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-sm font-mono text-emerald-300">
-                            ${toNumber(tx.amount).toFixed(2)}
-                          </div>
-                          <div className="text-xs text-slate-400">{tx.country}</div>
-                        </div>
-                      </div>
-                      <div className="mt-2 flex items-center justify-between text-xs text-slate-400">
-                        <span>Estado: {normalizeStatus(tx.state)}</span>
-                        <span>IP: {tx.ip}</span>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </Card>
-          </section>
         )}
       </div>
       <AlertContainer
